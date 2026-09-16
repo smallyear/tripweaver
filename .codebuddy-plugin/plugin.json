@@ -36,7 +36,7 @@
     { "en": "Map Visualization", "zh": "地图可视化" }
   ],
   "quickPrompts": [
-    { "en": "Plan a trip and generate the map", "zh": "我想规划一次旅行，请一步步帮我确认细节，最后生成可缩放地图和带文字行程的路线图。" },
+    { "en": "I want to plan a trip. Help me confirm the details step by step, then generate a zoomable map and a route image with a text itinerary.", "zh": "我想规划一次旅行，请一步步帮我确认细节，最后生成可缩放地图和带文字行程的路线图。" },
     { "en": "5 days in Tokyo: food + shopping", "zh": "帮我在东京规划 5 天，主打美食和购物的行程" },
     { "en": "Check weather before departure", "zh": "出发前帮我查一下实时天气，并更新出行清单" }
   ]
