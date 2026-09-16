@@ -1,5 +1,5 @@
 {
-  "name": "travel-planner",
+  "name": "tripweaver",
   "version": "1.0.0",
   "description": "AI travel planner that co-designs itineraries with users and generates a zoomable map plus a route image.",
   "author": {
@@ -29,7 +29,7 @@
     "zh": "我想规划一次旅行，请一步步帮我确认细节，最后生成可缩放地图和带文字行程的路线图。",
     "en": "I want to plan a trip. Help me confirm the details step by step, then generate a zoomable map and a route image with a text itinerary."
   },
-  "plugin": "travel-planner",
+  "plugin": "tripweaver",
   "tags": [
     { "en": "Itinerary Customization", "zh": "行程定制" },
     { "en": "Route Planning", "zh": "路线规划" },
