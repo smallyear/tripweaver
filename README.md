@@ -71,6 +71,13 @@ python3 scripts/register_expert.py <expert-dir>
 ```
 
 ## 打包分享
+
+`dist/tripweaver.zip` 入库，是可直接上传的专家包。**源码改动后请在提交前重新打包**，否则包会落后于源码（曾发生过）：
+
 ```bash
-zip -r travel-planner.zip travel-planner/
+bin/build_package.sh              # 输出 dist/tripweaver.zip，包内根目录为 tripweaver/
+bin/build_package.sh /tmp/x.zip   # 也可指定输出路径
 ```
+
+- 排除项：`.git`、`.gitignore`、`dist/`、`output/`、`.workbuddy/`、`__pycache__/`、`*.pyc`、`.DS_Store`、`*.log`。
+- 打包前校验必需文件齐全（`plugin.json`、SOP、三个生成脚本、schema、头像等），缺失即中止且**不覆盖已有包**；打包后做 `unzip -t` 完整性校验。
