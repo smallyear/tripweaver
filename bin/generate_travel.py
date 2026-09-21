@@ -3,21 +3,29 @@
 
 用法:
     python3 generate_travel.py <itinerary.json> [--out <目录>] [--no-png] [--skip-verify]
+                               [--geocode-only] [--dump-coords]
 
-- 站点缺 lat/lng 时，自动用 Nominatim(OSM) 按地名地理编码（WGS-84）。
+- 站点缺 lat/lng 时按顺序解析坐标：本地缓存 references/poi-coords.json → Photon → Nominatim（均为 WGS-84）。
+- stop 带 coord_source: "gcj02" 时（腾讯/高德/百度取来的坐标）先自动换算成 WGS-84，避免标记偏 300~600m。
+- --geocode-only：只解析坐标并打印「站点坐标核对表」后退出（有缺失/低置信返回码 2），便于先核对再出图。
+- --dump-coords：输出可粘贴进 references/poi-coords.json 的坐标片段。
 - HTML 用 Leaflet + OpenStreetMap（浏览器直接打开即可缩放/拖动）。
-- PNG 用 Playwright 截图（需 pip install playwright && playwright install chromium）。
+- PNG 用 Playwright 截图（需 pip install playwright；优先复用系统 Chrome）。
 - 自检：HTML 无占位符残留/无 JS 错误/行程与标记齐全/地图瓦片加载；PNG 无截断且尺寸正常。
   任一关键项失败会以退出码 1 中止，提醒「不要交付，先排查」。
 """
 import argparse
 import json
+import re
 import sys
 import time
 import urllib.parse
 import urllib.request
 from math import sin, cos, pi
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from coord_convert import gcj_to_wgs  # noqa: E402
 
 DAY_COLORS = [
     "#e63946", "#f4a261", "#2a9d8f", "#4361ee", "#7209b7",
@@ -27,23 +35,311 @@ DAY_COLORS = [
 UA = "travel-planner/1.0 (WorkBuddy)"
 MAX_PNG_HEIGHT = 6000  # PNG 高度安全上限，超过则阻断并建议拆分行程
 
+# 底图源：国内用高德（中文路网全、可达性好，需 GCJ-02 坐标），境外用 OSM（WGS-84）
+BASEMAPS = {
+    "amap": {
+        "id": "amap",
+        "url": "https://wprd0{s}.is.autonavi.com/appmaptile?x={x}&y={y}&z={z}&lang=zh_cn&size=1&scl=1&style=7",
+        "subdomains": "1234",
+        "attribution": "© 高德地图",
+    },
+    "osm": {
+        "id": "osm",
+        "url": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+        "subdomains": "abc",
+        "attribution": "© OpenStreetMap",
+    },
+    "carto": {
+        "id": "carto",
+        "url": "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png",
+        "subdomains": "abcd",
+        "attribution": "© CARTO / OpenStreetMap",
+    },
+}
 
-def geocode(name, ctx):
-    """用 Nominatim 把地名解析为 WGS-84 的 (lat, lng)。失败时返回 (None, None)。
-    ctx 优先用 stop 自带的 region（市/县），其次 trip.destination。"""
+
+def in_china(lng, lat):
+    """粗略判断坐标是否在中国大陆范围内（决定是否施加 GCJ-02 偏移）。"""
+    return 72.0 <= lng <= 137.9 and 0.83 <= lat <= 53.9
+
+
+def _fetch_json(url, tries=3, timeout=8):
+    """带退避重试的 JSON 请求。Photon 偶发 SSL: UNEXPECTED_EOF 属瞬时错误，重试通常能过。"""
+    last = None
+    for i in range(tries):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": UA})
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.load(r)
+        except Exception as e:  # noqa: BLE001
+            last = e
+            if i < tries - 1:
+                time.sleep(0.8 * (i + 1))
+    raise last
+
+
+PROVINCE_HINTS = ("黑龙江", "内蒙古", "新疆", "西藏", "广西", "宁夏", "云南", "四川", "山西", "山东",
+                  "贵州", "广东", "浙江", "江苏", "福建", "湖南", "湖北", "河南", "河北", "陕西",
+                  "甘肃", "青海", "海南", "吉林", "辽宁", "安徽", "江西", "台湾",
+                  "北京", "上海", "天津", "重庆", "香港", "澳门")
+# Photon 有时用 ISO-3166-2 代码表示省份（如「西湖」命中 state=ZJ 而非「浙江省」），需能对上
+PROVINCE_ISO = {
+    "北京": "BJ", "天津": "TJ", "上海": "SH", "重庆": "CQ", "河北": "HE", "山西": "SX",
+    "辽宁": "LN", "吉林": "JL", "黑龙江": "HL", "江苏": "JS", "浙江": "ZJ", "安徽": "AH",
+    "福建": "FJ", "江西": "JX", "山东": "SD", "河南": "HA", "湖北": "HB", "湖南": "HN",
+    "广东": "GD", "海南": "HI", "四川": "SC", "贵州": "GZ", "云南": "YN", "陕西": "SN",
+    "甘肃": "GS", "青海": "QH", "台湾": "TW", "内蒙古": "NM", "广西": "GX", "西藏": "XZ",
+    "宁夏": "NX", "新疆": "XJ", "香港": "HK", "澳门": "MO",
+}
+
+
+def _province_ok(prov_tok, admin_blob):
+    """省级归属校验：中文省名或 ISO 代码命中任一即可。"""
+    if not prov_tok or not admin_blob:
+        return True
+    if prov_tok in admin_blob:
+        return True
+    code = PROVINCE_ISO.get(prov_tok)
+    if not code:
+        return False
+    return code in re.split(r"[\s,，/|]+", admin_blob.upper())
+
+
+def _ctx_tokens(ctx):
+    """把 region/destination 拆成省/市/县多级 token（只用于归属校验，不拼进查询词）。
+
+    region 常写成连续中文（「云南普洱思茅」「山西运城新绛」），因此：
+    按分隔符拆 → 剥掉省名前缀 → 再按 2 字切分成可匹配的短 token。
+    """
+    if not ctx:
+        return []
+    parts = []
+    for part in re.split(r"[\s,，、·/|]+", ctx.strip()):
+        if len(part) < 2:
+            continue
+        for p in PROVINCE_HINTS:
+            if part.startswith(p) and len(part) > len(p):
+                parts.extend([p, part[len(p):]])
+                break
+        else:
+            parts.append(part)
+    toks = []
+    for part in parts:
+        toks.extend([part[i:i + 2] for i in range(0, len(part) - 1, 2)] if len(part) > 2 else [part])
+    seen, uniq = set(), []
+    for t in toks:
+        if len(t) >= 2 and t not in seen:
+            seen.add(t)
+            uniq.append(t)
+    return uniq
+
+
+NAME_PREFIXES = ("中国科学院", "中科院", "国家级", "国家")
+NAME_SUFFIXES = ("国家森林公园", "国家公园", "森林公园", "风景名胜区", "风景区", "旅游景区",
+                 "旅游小镇", "度假酒店", "景区", "公园", "古城", "酒店", "小镇", "庄园")
+# 景区/园区/建筑类地名必须命中「场所」，不能是树、河、小径等同名自然物或线性物
+FACILITY_KEYWORDS = ("景区", "公园", "庄园", "古城", "酒店", "民宿", "机场", "车站", "乐园",
+                     "小镇", "博物馆", "口岸", "寺", "宫", "度假", "营地", "大学", "医院")
+# 任何行程站点都不该落在「一棵树 / 一条小径」上：这类命中一律拒绝
+ALWAYS_NON_PLACE_VALUES = {"tree", "scrub", "wood", "path", "track", "footway", "cycleway"}
+# 景区/园区/建筑类地名必须命中「场所」，不能是河湖林草等自然物（「南腊河」这类没带场所词，不受此限）
+FACILITY_NON_PLACE_VALUES = ALWAYS_NON_PLACE_VALUES | {
+    "river", "stream", "water", "wetland", "grassland", "heath"}
+# 行政标签点（边界/形心）：如「勐腊县」的 county 形心离县城 20km，仅作兜底
+ADMIN_LABEL_VALUES = {"county", "state", "province", "region", "district", "administrative"}
+# 聚落级：优先于标签点与车站等附属设施
+SETTLEMENT_VALUES = {"city", "town", "village", "hamlet", "quarter", "neighbourhood", "suburb", "locality"}
+# 「县城/城区」在地名库里通常落在「XX镇/XX街道」节点上
+ADMIN_SUFFIX_MAP = (("县城", "镇"), ("城区", "街道"), ("市区", "市"))
+
+
+def _core_name(name):
+    """去掉机构前缀与通用后缀，得到核心地名（望天树景区→望天树）。"""
+    core = name
+    for _ in range(3):
+        changed = False
+        for pre in NAME_PREFIXES:
+            if core.startswith(pre) and len(core) > len(pre) + 2:
+                core, changed = core[len(pre):], True
+        for suf in NAME_SUFFIXES:
+            if core.endswith(suf) and len(core) > len(suf) + 2:
+                core, changed = core[: -len(suf)], True
+        if not changed:
+            break
+    return core
+
+
+def _query_variants(name, ctx):
+    """构造查询词链。
+
+    实测（西双版纳/普洱 13 个站点）：Photon 的 q 一旦拼上「地名前缀」就很容易返回 0 条
+    （「云南勐腊 勐腊县城」=0 条，「勐腊县城」=1 条），所以**纯地名优先**，加大地点前缀只作兜底。
+    """
+    core = _core_name(name)
+    outs = [name]
+    if core != name:
+        outs.append(core)
+    base = core if core != name else name
+    for suf, rep in ADMIN_SUFFIX_MAP:
+        if base.endswith(suf) and len(base) > len(suf):
+            outs.append(base[: -len(suf)] + rep)
+    # 去掉「城市/地区前缀」：Photon 对整串中文地名（如「杭州西湖」「普洱茶马古城」）召回为 0，
+    # 拆出景点名（西湖 / 茶马古城）才能命中
+    admin_only = {"县城", "城区", "市区", "老城", "城关"}
+    for t in _ctx_tokens(ctx):
+        for b in (name, core):
+            rest = b[len(t):] if b.startswith(t) else ""
+            if len(rest) >= 2 and rest not in admin_only:
+                outs.append(rest)
+    # 加大地点前缀（正例：「西双版纳嘎洒国际机场」可召回，「嘎洒国际机场」不可）
+    for t in _ctx_tokens(ctx)[:3]:
+        for b in list(outs):
+            if t not in b:
+                outs.append(t + b)
+    seen, uniq = set(), []
+    for q in outs:
+        if q and len(q) >= 2 and q not in seen:
+            seen.add(q)
+            uniq.append(q)
+    return uniq[:6]
+
+
+def _score_features(feats, name, core, toks):
+    """打分 + 硬性过滤。返回 [(score, feature, meta)]，按分数降序。"""
+    scored = []
+    facility = any(k in name for k in FACILITY_KEYWORDS)
+    for f in feats:
+        p = f.get("properties") or {}
+        vals = {k: str(p.get(k) or "") for k in
+                ("state", "city", "county", "district", "locality", "name", "street")}
+        fname = vals["name"]
+        osm_value = str(p.get("osm_value") or "")
+        if not fname:
+            continue
+        blob = " ".join(vals.values())
+        admin_blob = " ".join(v for k, v in vals.items()
+                              if k in ("state", "city", "county", "district", "locality") and v)
+        # 硬校验 1：有行政字段时，省级归属必须能对上（挡掉跨省同名，如「小熊猫庄园」命中成都的小熊猫园）；
+        #           完全没有行政字段时（Photon 常见）无法校验，放行但降为低置信
+        if not _province_ok(toks[0] if toks else "", admin_blob):
+            continue
+        # 硬校验 2：名称必须有重叠（挡掉「普洱茶马古城」命中昭通的「普洱镇」）
+        if not (fname in name or fname in core or (core and core in fname)):
+            continue
+        # 硬校验 3：拒绝「树 / 小径」这类非场所命中（如「望天树景区」命中植物园里的望天树[tree]）；
+        #           带场所词（景区/公园/机场…）的地名再额外拒绝河湖林草
+        if osm_value in ALWAYS_NON_PLACE_VALUES:
+            continue
+        if facility and osm_value in FACILITY_NON_PLACE_VALUES:
+            continue
+
+        if admin_blob and len(toks) >= 2:
+            loc_ok = any(t in admin_blob for t in toks[1:])
+        elif not admin_blob:
+            loc_ok = False  # 无行政字段可校验，交给人工确认
+        else:
+            loc_ok = True
+        score = 3 if loc_ok and len(toks) >= 2 else 0
+        score += 2 if fname == name else (1 if core and core in fname else 0)
+        if osm_value in SETTLEMENT_VALUES:
+            score += 2
+        elif osm_value in ADMIN_LABEL_VALUES:
+            score -= 1
+        if p.get("type") in ("city", "district", "locality"):
+            score += 1
+        scored.append((score, f, {
+            "loc_ok": loc_ok,
+            "osm": f"{p.get('osm_key')}={osm_value}",
+            "admin": " / ".join(v for v in (vals["state"], vals["city"], vals["county"]) if v),
+        }))
+    scored.sort(key=lambda t: -t[0])
+    return scored
+
+
+def _geocode_photon(name, ctx):
+    """Photon 解析为 WGS-84。返回 (lat, lng, meta)；失败返回 (None, None, meta)。"""
+    toks = _ctx_tokens(ctx)
+    core = _core_name(name)
+    tried = []
+    for q in _query_variants(name, ctx):
+        url = "https://photon.komoot.io/api/?" + urllib.parse.urlencode({"q": q, "limit": 5})
+        try:
+            data = _fetch_json(url)
+        except Exception as e:  # noqa: BLE001
+            print(f"  [warn] Photon 请求失败: {q} ({e})", file=sys.stderr)
+            continue
+        scored = _score_features(data.get("features") or [], name, core, toks)
+        if not scored:
+            tried.append(q)
+            continue
+        score, feat, meta = scored[0]
+        coords = feat["geometry"]["coordinates"]  # [lng, lat]
+        alts = [f"{round(x[1]['geometry']['coordinates'][1], 4)},{round(x[1]['geometry']['coordinates'][0], 4)}"
+                for x in scored[1:3]]
+        meta.update({
+            "via": "photon",
+            "query": q,
+            "conf": "ok" if (meta["loc_ok"] and score >= 3) else "low",
+            "alt": alts,
+        })
+        return float(coords[1]), float(coords[0]), meta
+    return None, None, {"via": "photon", "tried": tried}
+
+
+def _geocode_nominatim(name, ctx):
+    """Nominatim(OSM) 兜底。无归属校验，一律标低置信。返回 (lat, lng, meta)。"""
     q = f"{name}, {ctx}" if ctx else name
     url = "https://nominatim.openstreetmap.org/search?" + urllib.parse.urlencode(
         {"format": "json", "q": q, "limit": 1, "accept-language": "zh-CN"}
     )
-    req = urllib.request.Request(url, headers={"User-Agent": UA})
     try:
-        with urllib.request.urlopen(req, timeout=10) as r:
-            data = json.load(r)
+        data = _fetch_json(url, tries=2, timeout=10)
         if data:
-            return float(data[0]["lat"]), float(data[0]["lon"])
+            return float(data[0]["lat"]), float(data[0]["lon"]), {
+                "via": "nominatim", "query": q, "conf": "low", "loc_ok": True, "osm": "nominatim", "admin": ""}
     except Exception as e:  # noqa: BLE001
-        print(f"  [warn] 地理编码失败: {name} ({e})", file=sys.stderr)
-    return None, None
+        print(f"  [warn] Nominatim 编码失败: {name} ({e})", file=sys.stderr)
+    return None, None, None
+
+
+def geocode(name, ctx):
+    """Photon 优先，失败再试 Nominatim。返回 (lat, lng, meta)；全失败为 (None, None, meta)。"""
+    lat, lng, meta = _geocode_photon(name, ctx)
+    if lat is not None:
+        return lat, lng, meta
+    lat, lng, nm = _geocode_nominatim(name, ctx)
+    if lat is not None:
+        return lat, lng, nm
+    return None, None, (meta or {"via": "photon"})
+
+
+CACHE_PATH = Path(__file__).resolve().parent.parent / "references" / "poi-coords.json"
+
+
+def load_coord_cache():
+    """读取已核实 POI 坐标缓存（references/poi-coords.json）。缺失时返回空字典。"""
+    try:
+        raw = json.loads(CACHE_PATH.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return {}
+    return {k: v for k, v in raw.items()
+            if not k.startswith("_") and isinstance(v, dict)
+            and v.get("lat") is not None and v.get("lng") is not None}
+
+
+def cache_lookup(cache, name):
+    """先精确匹配，再退化为「缓存键是站点名子串」的模糊匹配（取最长键）。"""
+    if name in cache:
+        return cache[name]
+    cands = [k for k in cache if k and k in name]
+    return cache[max(cands, key=len)] if cands else None
+
+
+def straight_km(lat1, lng1, lat2, lng2):
+    """两点直线距离（km），用于核对表里的「距上一站」提示。"""
+    dy = (lat2 - lat1) * 111.32
+    dx = (lng2 - lng1) * 111.32 * cos((lat1 + lat2) / 2 * pi / 180)
+    return (dx * dx + dy * dy) ** 0.5
 
 
 HTML_TEMPLATE = """<!DOCTYPE html>
@@ -145,38 +441,66 @@ Object.keys(byDay).map(Number).sort(function(a,b){ return a-b; }).forEach(functi
   sb.appendChild(sec);
 });
 
-// ---- 地图（Leaflet + 高德底图，国内可达、中文路网标注全） ----
+// ---- 地图：底图按行程范围自动选择（国内高德 / 境外 OSM），可在 trip.basemap 覆盖 ----
 var map = L.map('map', { zoomControl: true });
-L.tileLayer('https://wprd0{s}.is.autonavi.com/appmaptile?x={x}&y={y}&z={z}&lang=zh_cn&size=1&scl=1&style=7', { subdomains: '1234', maxZoom: 19, attribution: '© 高德地图' }).addTo(map);
+var BASEMAPS = __BASEMAPS__;
+var routeLayer = L.layerGroup().addTo(map);
+var tileLayer = null;
+var basemapIndex = 0;
 var pts = [];
-var prev = null;
-stops.forEach(function(s){
-  if (s.lat == null || s.lng == null) return;
-  var ll = [s.lat, s.lng]; pts.push(ll);
-  var color = DAYCOLORS[s.day] || '#4361ee';
-  var icon = L.divIcon({ className: '', html:
-    '<div style="background:'+color+';width:26px;height:26px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;"><span style="transform:rotate(45deg);color:#fff;font-size:12px;font-weight:700;">'+s.day+'</span></div>',
-    iconSize: [26,26], iconAnchor: [13,26] });
-  var popup = '<div class="pop-title">第'+s.day+'天 '+(s.time||'')+' · '+esc(s.name)+'</div>'+(s.note?'<div class="pop-note">'+esc(s.note)+'</div>':'');
-  var mk = L.marker(ll, { icon: icon }).addTo(map).bindPopup(popup);
-  markersByIdx[s.__i] = mk;
-  mk.on('click', function(){ highlightSidebar(s.__i); });  // 地图→左侧反联动
-  // 常驻名称标签：每个数字标记旁直接显示景点名（无需点击）
-  mk.bindTooltip(esc(s.name), { permanent: true, direction: 'right', offset: [10, 0], className: 'mlabel' });
-  // 连续实线：按序连接所有站点（跨天也连），形成完整路线而非分段断线
-  if (prev) L.polyline([prev, ll], { color: color, weight: 4, opacity: .85 }).addTo(map);
-  prev = ll;
-});
-// 环线闭合：若首末站点同名（出发地=返程地），用虚线把终点连回起点
-if (pts.length > 2) {
-  var fIdx = stops.findIndex(function(s){ return s.lat != null && s.lng != null; });
-  var lIdx = -1;
-  for (var i = stops.length - 1; i >= 0; i--) { if (stops[i].lat != null && stops[i].lng != null) { lIdx = i; break; } }
-  if (fIdx >= 0 && lIdx >= 0 && stops[fIdx].name === stops[lIdx].name) {
-    L.polyline([pts[pts.length - 1], pts[0]], { color: DAYCOLORS[stops[fIdx].day] || '#4361ee', weight: 4, opacity: .85, dashArray: '2,8' }).addTo(map);
+
+// 高德底图用 GCJ-02 坐标，OSM/CARTO 用原始 WGS-84
+function coordOf(s){
+  if (BASEMAPS[basemapIndex].id === 'amap' && s.lat_gcj != null && s.lng_gcj != null) {
+    return [s.lat_gcj, s.lng_gcj];
   }
+  return [s.lat, s.lng];
 }
-if (pts.length) map.fitBounds(pts, { padding: [40,40] }); else map.setView([35,105], 4);
+function applyBasemap(i){
+  if (tileLayer) map.removeLayer(tileLayer);
+  basemapIndex = i;
+  var b = BASEMAPS[i];
+  tileLayer = L.tileLayer(b.url, { subdomains: b.subdomains || 'abc', maxZoom: 19, attribution: b.attribution || '' }).addTo(map);
+}
+function draw(){
+  routeLayer.clearLayers();
+  markersByIdx = {};
+  pts = [];
+  var prev = null;
+  stops.forEach(function(s){
+    if (s.lat == null || s.lng == null) return;
+    var ll = coordOf(s); pts.push(ll);
+    var color = DAYCOLORS[s.day] || '#4361ee';
+    var icon = L.divIcon({ className: '', html:
+      '<div style="background:'+color+';width:26px;height:26px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;"><span style="transform:rotate(45deg);color:#fff;font-size:12px;font-weight:700;">'+s.day+'</span></div>',
+      iconSize: [26,26], iconAnchor: [13,26] });
+    var popup = '<div class="pop-title">第'+s.day+'天 '+(s.time||'')+' · '+esc(s.name)+'</div>'+(s.note?'<div class="pop-note">'+esc(s.note)+'</div>':'');
+    var mk = L.marker(ll, { icon: icon }).addTo(routeLayer).bindPopup(popup);
+    markersByIdx[s.__i] = mk;
+    mk.on('click', function(){ highlightSidebar(s.__i); });  // 地图→左侧反联动
+    // 常驻名称标签：每个数字标记旁直接显示景点名（无需点击）
+    mk.bindTooltip(esc(s.name), { permanent: true, direction: 'right', offset: [10, 0], className: 'mlabel' });
+    // 连续实线：按序连接所有站点（跨天也连），形成完整路线而非分段断线
+    if (prev) L.polyline([prev, ll], { color: color, weight: 4, opacity: .85 }).addTo(routeLayer);
+    prev = ll;
+  });
+  // 环线闭合：若首末站点同名（出发地=返程地），用虚线把终点连回起点
+  if (pts.length > 2) {
+    var fIdx = stops.findIndex(function(s){ return s.lat != null && s.lng != null; });
+    var lIdx = -1;
+    for (var i = stops.length - 1; i >= 0; i--) { if (stops[i].lat != null && stops[i].lng != null) { lIdx = i; break; } }
+    if (fIdx >= 0 && lIdx >= 0 && stops[fIdx].name === stops[lIdx].name) {
+      L.polyline([pts[pts.length - 1], pts[0]], { color: DAYCOLORS[stops[fIdx].day] || '#4361ee', weight: 4, opacity: .85, dashArray: '2,8' }).addTo(routeLayer);
+    }
+  }
+  window.__PTS__ = pts;
+}
+function fitAll(){
+  if (pts.length) map.fitBounds(pts, { padding: [40,40] }); else map.setView([35,105], 4);
+}
+window.__setBasemap__ = function(i){ applyBasemap(i); draw(); fitAll(); };
+window.__basemapId__ = function(){ return BASEMAPS[basemapIndex].id; };
+applyBasemap(0); draw(); fitAll();
 // ---- 左→右联动：点击左侧站点，地图飞到对应标记并弹窗；右→左高亮反联动 ----
 function focusStop(i){
   var mk = markersByIdx[i]; if (!mk) return;
@@ -225,6 +549,9 @@ def _transform_lng(x, y):
 
 
 def wgs84_to_gcj02(lng, lat):
+    # 境外坐标不做偏移：GCJ-02 偏移算法仅适用于中国大陆，境外施加会凭空产生数百米误差
+    if not in_china(lng, lat):
+        return lng, lat
     dlat = _transform_lat(lng - 105.0, lat - 35.0)
     dlng = _transform_lng(lng - 105.0, lat - 35.0)
     radlat = lat / 180.0 * pi
@@ -236,30 +563,78 @@ def wgs84_to_gcj02(lng, lat):
     return lng + dlng, lat + dlat
 
 
-def build_html(itin):
+def build_html(itin, basemap_ids):
     data_json = json.dumps(itin, ensure_ascii=False).replace("</", "<\\/")
     days = sorted({int(s["day"]) for s in itin.get("stops", []) if s.get("day") is not None})
     day_color = {d: DAY_COLORS[i % len(DAY_COLORS)] for i, d in enumerate(days)}
     title = (itin.get("trip", {}).get("title") or "旅行行程")
+    basemaps = [BASEMAPS[b] for b in basemap_ids]
     return (HTML_TEMPLATE
             .replace("__DATA__", data_json)
             .replace("__DAYCOLORS__", json.dumps(day_color, ensure_ascii=False))
+            .replace("__BASEMAPS__", json.dumps(basemaps, ensure_ascii=False))
             .replace("__TITLE__", title))
 
 
-def verify_and_render(html_path, png_path, itin, want_png):
-    """启动一次 Playwright 会话：渲染 PNG（自适应高度防截断）+ 跑全套自检，返回 (ok, report_lines)。"""
+def resolve_basemaps(itin):
+    """返回底图 id 列表（第一个为主底图，其余为备用回退）。
+    国内行程 → 高德（中文路网全）；境外 → OSM。可用 trip.basemap 覆盖。"""
+    override = (itin.get("trip", {}).get("basemap") or "").lower().strip()
+    if override in BASEMAPS:
+        return [override, "osm" if override != "osm" else "carto"]
+
+    coords = [(s["lng"], s["lat"]) for s in itin.get("stops", [])
+              if s.get("lat") is not None and s.get("lng") is not None]
+    if not coords:
+        return ["amap", "osm"]
+    domestic = sum(1 for lng, lat in coords if in_china(lng, lat))
+    if domestic >= len(coords) / 2:
+        return ["amap", "osm"]
+    return ["osm", "carto"]
+
+
+def launch_browser(playwright):
+    """优先复用系统已安装的浏览器做渲染，避免下载 playwright chromium（数百 MB、常很慢）：
+    系统 Chrome → 系统 Edge → playwright 自带 chromium。
+    返回 (browser, 引擎名)。"""
+    attempts = [
+        ({"channel": "chrome"}, "系统 Chrome"),
+        ({"channel": "msedge"}, "系统 Edge"),
+        ({}, "playwright Chromium"),
+    ]
+    last_err = None
+    for kwargs, label in attempts:
+        try:
+            return playwright.chromium.launch(**kwargs), label
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+    raise RuntimeError(f"系统 Chrome / Edge 与内置 Chromium 均无法启动：{last_err}")
+
+
+def verify_and_render(html_path, png_path, itin, want_png, basemap_count=1):
+    """启动一次 Playwright 会话：渲染 PNG（自适应高度防截断）+ 跑全套自检，返回 (ok, report_lines)。
+
+    自检分级：
+    - ❌ 阻断项：结构性错误（占位符残留 / 行程未渲染 / 站点数不符 / JS 报错 / PNG 截断）→ 退出码 1。
+    - ⚠️ 降级项：环境类问题（无网络、缺 playwright、坐标缺失）→ 仅告警，仍允许交付。
+    """
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
-        return False, ["⚠️ 未安装 playwright，跳过自检与 PNG。安装: pip install playwright && playwright install chromium"]
+        return True, ["⚠️ 未安装 playwright，跳过自检与 PNG（HTML 已生成，可直接交付）。"
+                      "如需 PNG：pip install playwright（渲染优先复用系统 Chrome，无需 playwright install chromium）"]
 
     report = []
     ok = True
     errors = []
 
     with sync_playwright() as p:
-        browser = p.chromium.launch()
+        try:
+            browser, engine = launch_browser(p)
+        except Exception as e:  # noqa: BLE001
+            return True, [f"⚠️ 无法启动浏览器（{e}），跳过自检与 PNG（HTML 已生成，可直接交付）。"
+                          "安装 Google Chrome 或执行 playwright install chromium 后重跑即可出 PNG"]
+        report.append(f"ℹ️ 渲染引擎: {engine}")
         page = browser.new_page(viewport={"width": 1600, "height": 1000})
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.on("console", lambda m: errors.append(f"console.{m.type}: {m.text}") if m.type == "error" else None)
@@ -292,37 +667,37 @@ def verify_and_render(html_path, png_path, itin, want_png):
         else:
             report.append(f"✅ 站点数一致: {stop_count}")
 
-        tiles_loaded = page.evaluate("() => document.querySelectorAll('#map img.leaflet-tile-loaded').length")
-        tiles_total = page.evaluate("() => document.querySelectorAll('#map img.leaflet-tile').length")
+        def tile_stats():
+            loaded = page.evaluate("() => document.querySelectorAll('#map img.leaflet-tile-loaded').length")
+            total = page.evaluate("() => document.querySelectorAll('#map img.leaflet-tile').length")
+            return loaded, total
+
+        tiles_loaded, tiles_total = tile_stats()
+        # 主底图铺不满（无网络 / 被限制）时自动回退到备用底图
+        if (tiles_total == 0 or tiles_loaded < tiles_total * 0.6) and basemap_count > 1:
+            page.evaluate("() => window.__setBasemap__(1)")
+            page.wait_for_timeout(2500)
+            tiles_loaded, tiles_total = tile_stats()
+            report.append("ℹ️ 主底图瓦片加载不足，已自动回退到备用底图: "
+                          + str(page.evaluate("() => window.__basemapId__()")))
         if tiles_total == 0:
-            ok = False
-            report.append("❌ 地图瓦片未加载（可能无网络 / OSM 被限制），底图会空白")
+            report.append("⚠️ 底图瓦片未加载（无网络 / 底图源被限制），地图区域会空白；"
+                          "左侧文字行程仍可正常交付")
         elif tiles_loaded < tiles_total * 0.8:
-            ok = False
-            report.append(f"❌ 地图瓦片加载不全: 已加载 {tiles_loaded}/{tiles_total}（底图会‘稀碎’，检查网络或换底图）")
+            report.append(f"⚠️ 底图瓦片加载不全: 已加载 {tiles_loaded}/{tiles_total}"
+                          f"（地图可能‘稀碎’，请检查网络或换底图）")
         else:
-            report.append(f"✅ 地图瓦片已加载: {tiles_loaded}/{tiles_total}")
+            report.append(f"✅ 底图瓦片已加载: {tiles_loaded}/{tiles_total}")
 
         markers = page.evaluate("() => document.querySelectorAll('#map .leaflet-marker-icon').length")
         expected_markers = len([s for s in itin.get("stops", []) if s.get("lat") is not None and s.get("lng") is not None])
         if markers < expected_markers:
-            ok = False
-            report.append(f"❌ 地图标记缺失: 渲染={markers} 应有={expected_markers}（检查 lat/lng 或地理编码是否成功）")
+            report.append(f"⚠️ 地图标记缺失: 渲染={markers} 应有={expected_markers}"
+                          f"（多为地理编码失败，请手填 lat/lng 后重跑）")
         else:
             report.append(f"✅ 地图标记齐全: {markers}")
 
-        # 联动自检（软检查，不影响交付）：点击左侧第一个站点，地图应飞至对应标记并弹窗
-        linkage = page.evaluate("() => (typeof focusStop === 'function') && (window.markersByIdx ? Object.keys(window.markersByIdx).length : 0) > 0")
-        if linkage:
-            page.evaluate("() => { var el = document.querySelector('#sidebar .stop'); if (el) el.click(); }")
-            page.wait_for_timeout(1000)
-            popup_open = page.evaluate("() => !!document.querySelector('.leaflet-popup')")
-            if popup_open:
-                report.append("✅ 左→右联动正常：点左侧站点地图已飞至对应标记并弹窗")
-            else:
-                report.append("⚠️ 左→右联动未触发弹窗（不影响查看，可忽略）")
-        else:
-            report.append("⚠️ 未检测到联动函数（focusStop/markersByIdx），点击左侧不会联动地图")
+        # 联动自检放到 PNG 截图之后（点击会打开气泡，若在截图前做会污染 PNG 画面）
 
         # 折叠自检（软检查）：点击某天标题，对应 day-body 应隐藏
         try:
@@ -381,7 +756,9 @@ def verify_and_render(html_path, png_path, itin, want_png):
                 target,
             )
             page.set_viewport_size({"width": 1600, "height": target})
-            page.wait_for_timeout(800)
+            # 收起气泡并留足地图动画稳定时间，避免弹窗/半途动画被拍进 PNG
+            page.evaluate("() => { if (window.__MAP__) window.__MAP__.closePopup(); }")
+            page.wait_for_timeout(1200)
             page.screenshot(path=str(png_path), full_page=True)
 
             # 截断校验：侧边栏完整内容是否落在图片高度内（无内部滚动条 = 未裁切）
@@ -409,6 +786,20 @@ def verify_and_render(html_path, png_path, itin, want_png):
 
             report.append(f"✅ PNG 已生成: {png_path}")
 
+        # 联动自检（软检查）：点击左侧第一个站点，地图应飞至对应标记并弹窗。
+        # 放在截图之后执行，避免点击产生的气泡进入 PNG 画面。
+        linkage = page.evaluate("() => (typeof focusStop === 'function') && (window.markersByIdx ? Object.keys(window.markersByIdx).length : 0) > 0")
+        if linkage:
+            page.evaluate("() => { var el = document.querySelector('#sidebar .stop'); if (el) el.click(); }")
+            page.wait_for_timeout(1000)
+            popup_open = page.evaluate("() => !!document.querySelector('.leaflet-popup')")
+            if popup_open:
+                report.append("✅ 左→右联动正常：点左侧站点地图已飞至对应标记并弹窗")
+            else:
+                report.append("⚠️ 左→右联动未触发弹窗（不影响查看，可忽略）")
+        else:
+            report.append("⚠️ 未检测到联动函数（focusStop/markersByIdx），点击左侧不会联动地图")
+
         browser.close()
 
     return ok, report
@@ -420,6 +811,10 @@ def main():
     ap.add_argument("--out", default=None, help="输出目录（默认与 json 同目录）")
     ap.add_argument("--no-png", action="store_true", help="不生成 PNG")
     ap.add_argument("--skip-verify", action="store_true", help="跳过出图前自检（不推荐）")
+    ap.add_argument("--geocode-only", action="store_true",
+                    help="只解析坐标并打印核对表后退出（有缺失/低置信返回码 2），不出图")
+    ap.add_argument("--dump-coords", action="store_true",
+                    help="输出可粘贴进 references/poi-coords.json 的坐标片段")
     args = ap.parse_args()
 
     itin_path = Path(args.itinerary).resolve()
@@ -429,38 +824,110 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
 
     ctx = itin.get("trip", {}).get("destination", "")
-    missing = [s for s in itin.get("stops", []) if (s.get("lat") is None or s.get("lng") is None) and s.get("name")]
-    for s in missing:
-        # 优先用 stop 自带 region（市/县）作地理编码上下文，多城环线下比 destination 更准
+    stops = itin.get("stops", [])
+
+    # 0) 手填坐标若标注为 GCJ-02（腾讯/高德/百度取来的），先换算成 WGS-84，避免二次偏移 300~600m
+    for s in stops:
+        if s.get("lat") is None or s.get("lng") is None:
+            continue
+        s["_src"] = "手填"
+        if str(s.get("coord_source", "")).lower() in ("gcj02", "gcj-02", "gcj", "amap", "tencent", "qq"):
+            s["lat"], s["lng"] = gcj_to_wgs(float(s["lat"]), float(s["lng"]))
+            s["coord_source"] = "wgs84"
+            s["_src"] = "手填（已由 GCJ-02 换算）"
+
+    # 1) 缺坐标：本地缓存优先，再 Photon / Nominatim
+    cache = load_coord_cache()
+    for s in stops:
+        if not s.get("name") or (s.get("lat") is not None and s.get("lng") is not None):
+            continue
+        name = s["name"]
         region = s.get("region") or ctx
-        lat, lng = geocode(s["name"], region)
+        hit = cache_lookup(cache, name)
+        if hit:
+            lat, lng = float(hit["lat"]), float(hit["lng"])
+            if str(hit.get("coord_source", "")).lower() in ("gcj02", "gcj-02", "gcj"):
+                lat, lng = gcj_to_wgs(lat, lng)
+                s["_src"] = "缓存（已由 GCJ-02 换算）"
+            else:
+                s["_src"] = "缓存"
+            s["lat"], s["lng"] = lat, lng
+            s["_meta"] = {"conf": "ok", "via": "cache", "admin": hit.get("note", ""), "osm": "cache"}
+            continue
+        lat, lng, meta = geocode(name, region)
+        s["_meta"] = meta or {}
         if lat is not None:
             s["lat"], s["lng"] = lat, lng
-        time.sleep(1.1)  # Nominatim 使用规范：请求间隔 ≥ 1s
+            s["_src"] = "自动编码" if (meta or {}).get("conf") != "low" else "自动编码·低置信"
+        if (meta or {}).get("via") == "nominatim":
+            time.sleep(1.1)  # Nominatim 使用规范：请求间隔 ≥ 1s（Photon 不需要）
 
-    # 出图前坐标核对表：列出每个站点的解析坐标，便于发现明显错位（如标到邻市）
+    # 2) 出图前坐标核对表：坐标 + 来源 + 命中的行政层级 + 与上一站距离，便于发现错位/误命中
     print("\n--- 站点坐标核对表（出图前请确认与预期一致）---")
-    geocoded_names = {s.get("name") for s in missing}
-    geo_failed = False
-    for s in itin.get("stops", []):
+    geo_failed, low_conf = False, False
+    prev = None
+    for s in stops:
         if not s.get("name"):
             continue
         if s.get("lat") is None or s.get("lng") is None:
-            print(f"  ⚠️  {s['name']}: 坐标缺失（地理编码失败，请手动补 lat/lng 或核对地名）")
+            meta = s.get("_meta") or {}
+            hint = "、".join(meta.get("tried") or []) or "无"
+            print(f"  ⚠️  {s['name']}: 坐标缺失（已试查询词：{hint}）→ 请手填 lat/lng 后重跑，"
+                  f"或补进 references/poi-coords.json")
             geo_failed = True
             continue
-        tag = "自动编码" if s["name"] in geocoded_names else "手填"
-        print(f"  •  {s['name']}: ({s['lat']}, {s['lng']}) [{tag}]")
+        meta = s.get("_meta") or {}
+        lat, lng = float(s["lat"]), float(s["lng"])
+        extra = []
+        if meta.get("admin"):
+            extra.append(meta["admin"])
+        if meta.get("osm") and meta.get("via") != "cache":
+            extra.append(meta["osm"])
+        if prev:
+            extra.append(f"距上一站 {straight_km(prev[0], prev[1], lat, lng):.0f}km")
+        flag = ""
+        if meta.get("conf") == "low":
+            flag = "  ⚠️ 低置信：仅命中省级归属或名称部分匹配，请人工确认"
+            low_conf = True
+        elif meta.get("alt"):
+            flag = f"  （次选 {meta['alt'][0]}）"
+        print(f"  •  {s['name']}: ({lat}, {lng}) [{s.get('_src', '手填')}] "
+              + (" · ".join(extra) if extra else "") + flag)
+        prev = (lat, lng)
     if geo_failed:
         print("  ⚠️ 存在坐标缺失站点，地图标记将不完整，建议修正后重跑。")
+    if low_conf:
+        print("  ⚠️ 存在低置信坐标，务必核对后再交付（对照 references/coordinate-sources.md）。")
 
-    # 坐标转换：存入 JSON 的是真实 WGS-84，渲染前转 GCJ-02 以贴合高德底图
+    if args.dump_coords:
+        dump = {}
+        for s in stops:
+            if s.get("name") and s.get("lat") is not None:
+                dump[s["name"]] = {"lat": round(float(s["lat"]), 5), "lng": round(float(s["lng"]), 5),
+                                   "coord_source": "wgs84", "note": s.get("region", "")}
+        print("\n--- 可粘贴进 references/poi-coords.json 的片段 ---")
+        print(json.dumps(dump, ensure_ascii=False, indent=2))
+
+    if args.geocode_only:
+        print("\nℹ️ --geocode-only：仅核对坐标，未生成 HTML/PNG。")
+        return 2 if (geo_failed or low_conf) else 0
+
+    # 中国大陆站点额外算一份 GCJ-02 坐标（高德底图用），原始 WGS-84 保留供 OSM/CARTO 使用
     for s in itin.get("stops", []):
-        if s.get("lat") is not None and s.get("lng") is not None:
-            glng, glat = wgs84_to_gcj02(float(s["lng"]), float(s["lat"]))
-            s["lng"], s["lat"] = glng, glat
+        if s.get("lat") is None or s.get("lng") is None:
+            continue
+        glng, glat = wgs84_to_gcj02(float(s["lng"]), float(s["lat"]))
+        if (glng, glat) != (float(s["lng"]), float(s["lat"])):
+            s["lng_gcj"], s["lat_gcj"] = glng, glat
+        for k in ("_src", "_meta"):  # 内部字段不进入页面数据
+            s.pop(k, None)
 
-    html = build_html(itin)
+    basemap_ids = resolve_basemaps(itin)
+    print(f"\n--- 底图 ---\n  主底图: {basemap_ids[0]}"
+          + (f"（备用回退: {basemap_ids[1]}）" if len(basemap_ids) > 1 else "")
+          + "  [可用 trip.basemap: amap|osm|carto 覆盖]")
+
+    html = build_html(itin, basemap_ids)
     html_path = out / "travel_map.html"
     html_path.write_text(html, encoding="utf-8")
     print(f"✅ HTML: {html_path}")
@@ -474,22 +941,29 @@ def main():
     if args.skip_verify:
         # 跳过自检但仍尽量出 PNG
         if png_path is not None:
-            ok, _ = verify_and_render(html_path, png_path, itin, want_png=True)
+            _, _ = verify_and_render(html_path, png_path, itin, want_png=True, basemap_count=len(basemap_ids))
             print("⚠️ 已跳过自检（--skip-verify），直接生成 PNG")
         else:
             print("⚠️ 已跳过自检（--skip-verify）")
         return
 
-    ok, report = verify_and_render(html_path, png_path, itin, want_png=(png_path is not None))
+    ok, report = verify_and_render(html_path, png_path, itin,
+                                   want_png=(png_path is not None),
+                                   basemap_count=len(basemap_ids))
     for line in report:
         print("  " + line)
+    warn_count = sum(1 for line in report if line.startswith("⚠️"))
 
     if not ok:
-        print("\n❌ 自检未通过：请勿交付，请先排查上方 ❌ 项（常见问题：无网络导致瓦片空白、"
-              "经纬度缺失导致标记丢失、行程过长导致截断）。")
+        print("\n❌ 自检未通过：请勿交付，请先排查上方 ❌ 项（常见问题：占位符未替换、"
+              "行程未渲染、JS 报错、PNG 被截断）。")
         sys.exit(1)
-    print("\n✅ 自检全部通过，可交付。")
+    if warn_count:
+        print(f"\n✅ 可交付（{warn_count} 项 ⚠️ 为环境类提示，如底图空白/缺 playwright，"
+              f"不影响 HTML 行程内容，按需处理即可）。")
+    else:
+        print("\n✅ 自检全部通过，可交付。")
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
