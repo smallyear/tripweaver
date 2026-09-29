@@ -22,10 +22,13 @@ generate_weather.py - 行程天气预报生成器
 import argparse
 import json
 import sys
-import time
 import urllib.parse
 import urllib.request
 from datetime import date, datetime, timedelta
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from generate_travel import geocode as _geocode  # noqa: E402  复用出图脚本已加固的地理编码
 
 MAX_LEAD_DAYS = 16  # Open-Meteo 预报窗口（天，含今天共 16 天）
 
@@ -75,23 +78,13 @@ def wmo_info(code):
 
 
 def geocode(name, region, destination):
-    """用 Nominatim 把地名解析成 (lat, lng)。失败返回 None。"""
-    q = name
-    ctx = region or destination
-    if ctx:
-        q = f"{name}, {ctx}"
-    url = "https://nominatim.openstreetmap.org/search?" + urllib.parse.urlencode(
-        {"q": q, "format": "json", "limit": 1}
-    )
-    req = urllib.request.Request(url, headers={"User-Agent": UA})
-    try:
-        with urllib.request.urlopen(req, timeout=20) as r:
-            data = json.loads(r.read().decode("utf-8"))
-        if data:
-            return float(data[0]["lat"]), float(data[0]["lon"])
-    except Exception as e:  # noqa: BLE001
-        print(f"  ⚠️ 地理编码失败: {name} ({e})", file=sys.stderr)
-    return None
+    """把地名解析成 (lat, lng)；失败返回 None。
+
+    直接复用 generate_travel.py 的 geocode（Photon 优先 + 本地坐标缓存 + Nominatim 兜底），
+    避免两个脚本各维护一份解析逻辑而行为不一致。其返回 (lat, lng, meta)，此处只取坐标。
+    """
+    lat, lng, _meta = _geocode(name, region or destination or "")
+    return (lat, lng) if lat is not None else None
 
 
 def forecast_for(lat, lng, start, end):
@@ -177,6 +170,7 @@ def main():
     cache = {}
     day_coords = {}
     day_rep = {}
+    geo_fail = False  # 站点未填坐标且解析失败，多为网络/服务不可达
     for d in range(1, days + 1):
         coords, rep = [], ""
         for s in by_day.get(d, []):
@@ -192,10 +186,11 @@ def main():
             key = (s0.get("name"), s0.get("region"), destination)
             if key not in cache:
                 cache[key] = geocode(s0.get("name"), s0.get("region"), destination)
-                time.sleep(1.1)  # Nominatim 限流
             if cache[key]:
                 coords = [cache[key]]
                 rep = s0.get("name", "")
+            else:
+                geo_fail = True
         day_coords[d] = coords
         day_rep[d] = rep
 
@@ -319,7 +314,10 @@ def main():
         if not tips:
             tips.append("近期天气平稳，按常规出行准备即可；出发前 1–2 天再看一次更新。")
     else:
-        tips.append("当前距出发超出预报窗口，暂无逐日数据；请在出发前约 16 天内再次运行本脚本。")
+        if net_ok and not geo_fail:
+            tips.append("当前距出发超出预报窗口，暂无逐日数据；请在出发前约 16 天内再次运行本脚本。")
+        else:
+            tips.append("天气服务暂时不可达，本次未取到预报数据；请稍后重跑本脚本，或出发前 1–2 天再查。")
 
     # 全程都落在窗口内的最早查询日 = 行程末日 -（窗口天数 - 1）
     full_window_from = end_date - timedelta(days=MAX_LEAD_DAYS - 1)
@@ -417,11 +415,12 @@ def main():
                     + (f"  [取站 {c['station']}{'，多站区间' if c['multi'] else ''}]" if c.get("station") else "")
                 )
     else:
-        print("  （暂无实时数据或超出预报窗口）")
+        reason = "天气服务不可达，未取到数据" if (not net_ok or geo_fail) else "超出预报窗口，暂无数据"
+        print(f"  （{reason}）")
     for t in tips:
         print("  · " + t)
     print(f"→ 已生成 {out_path}")
-    if not net_ok:
+    if not net_ok or geo_fail:
         print("⚠️ 部分预报获取失败，请检查网络后重跑；已渲染可用页面，不阻断交付。")
 
 
