@@ -18,7 +18,9 @@ OUT="${1:-$ROOT/dist/$PKG_NAME.zip}"
 
 # 不入包的内容
 EXCLUDES=(
-  ".git" ".gitignore" "dist" "output" ".workbuddy"
+  ".git" ".gitignore" "dist" "output" ".workbuddy" ".idea" ".jura"
+  # docs/ 是专家中心的运营素材（样张/文案），不随运行包分发
+  "docs"
   "__pycache__" "*.pyc" "*.pyo" ".DS_Store" "*.log"
 )
 
@@ -28,9 +30,16 @@ REQUIRED=(
   "$PKG_NAME/README.md"
   "$PKG_NAME/agents/travel-planner.md"
   "$PKG_NAME/bin/generate_travel.py"
+  "$PKG_NAME/bin/generate_share.py"
   "$PKG_NAME/bin/generate_checklist.py"
   "$PKG_NAME/bin/generate_weather.py"
+  "$PKG_NAME/bin/coord_convert.py"
   "$PKG_NAME/references/itinerary-schema.md"
+  "$PKG_NAME/references/share-guide.md"
+  "$PKG_NAME/references/checklist-guide.md"
+  "$PKG_NAME/references/weather-guide.md"
+  "$PKG_NAME/references/coordinate-sources.md"
+  "$PKG_NAME/references/poi-coords.json"
   "$PKG_NAME/avatars/expert.png"
 )
 

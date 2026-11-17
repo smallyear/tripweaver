@@ -1,7 +1,7 @@
 {
   "name": "tripweaver",
-  "version": "1.0.1",
-  "description": "AI travel planner that co-designs itineraries with users and generates a zoomable map plus a route image.",
+  "version": "1.1.0",
+  "description": "AI travel planner that co-designs itineraries with users, then generates a zoomable map, a route image with a text itinerary, and hand-drawn shareable posters.",
   "author": {
     "name": "WorkBuddy",
     "email": "noreply@workbuddy.cn"
@@ -20,24 +20,26 @@
     "zh": "旅行规划专家"
   },
   "displayDescription": {
-    "en": "Co-designs itineraries with you, then generates a zoomable map and a route image with a text itinerary.",
-    "zh": "和你一起逐条敲定目的地、天数、预算与偏好，定制专属行程，并一键生成可缩放地图与带文字行程的路线图。"
+    "en": "Co-designs itineraries with you, then generates a zoomable map, a route image with a text itinerary, and hand-drawn posters you can share.",
+    "zh": "和你一起逐条敲定目的地、天数、预算与偏好，定制专属行程，一键生成可缩放地图、带文字行程的路线图，以及可直接发朋友圈的手绘旅行海报。"
   },
   "avatar": "avatars/expert.png",
   "categoryId": "12-IndustryConsultant",
   "defaultInitPrompt": {
-    "zh": "我想规划一次旅行，请一步步帮我确认细节，最后生成可缩放地图和带文字行程的路线图。",
-    "en": "I want to plan a trip. Help me confirm the details step by step, then generate a zoomable map and a route image with a text itinerary."
+    "zh": "我想规划一次旅行，请一步步帮我确认细节，最后生成可缩放地图、带文字行程的路线图和可分享的旅行海报。",
+    "en": "I want to plan a trip. Help me confirm the details step by step, then generate a zoomable map, a route image with a text itinerary, and shareable travel posters."
   },
   "plugin": "tripweaver",
   "tags": [
     { "en": "Itinerary Customization", "zh": "行程定制" },
     { "en": "Route Planning", "zh": "路线规划" },
-    { "en": "Map Visualization", "zh": "地图可视化" }
+    { "en": "Map Visualization", "zh": "地图可视化" },
+    { "en": "Shareable Posters", "zh": "手绘分享图" }
   ],
   "quickPrompts": [
-    { "en": "I want to plan a trip. Help me confirm the details step by step, then generate a zoomable map and a route image with a text itinerary.", "zh": "我想规划一次旅行，请一步步帮我确认细节，最后生成可缩放地图和带文字行程的路线图。" },
+    { "en": "I want to plan a trip. Help me confirm the details step by step, then generate a zoomable map, a route image with a text itinerary, and shareable travel posters.", "zh": "我想规划一次旅行，请一步步帮我确认细节，最后生成可缩放地图、带文字行程的路线图和可分享的旅行海报。" },
     { "en": "5 days in Chengdu: food + slow living", "zh": "帮我在成都规划 5 天，主打美食和慢生活的行程" },
+    { "en": "Turn this itinerary into hand-drawn posters I can share", "zh": "把这份行程做成可以发朋友圈的手绘海报" },
     { "en": "Check weather before departure", "zh": "出发前帮我查一下实时天气，并更新出行清单" }
   ]
 }
