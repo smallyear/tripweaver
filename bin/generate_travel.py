@@ -55,6 +55,14 @@ BASEMAPS = {
         "subdomains": "abcd",
         "attribution": "© CARTO / OpenStreetMap",
     },
+    # Esri 地形晕渲：纯地形、零标注，配合本页自带的常驻中文景点标签，可出「复古探险地图」风。
+    # 用 WGS-84（与 OSM 同坐标系），国内/境外都可达（实测 200）。
+    "esri_physical": {
+        "id": "esri_physical",
+        "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Physical_Map/MapServer/tile/{z}/{y}/{x}",
+        "subdomains": "",
+        "attribution": "© Esri, NASA, USGS",
+    },
 }
 
 
@@ -381,10 +389,89 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   .mlabel { background: #fff; border: 1px solid #cdd6e0; border-radius: 6px; padding: 1px 6px;
             font-size: 11px; color: #1f2933; box-shadow: 0 1px 3px rgba(0,0,0,.15); white-space: nowrap; }
   .mlabel::before { display: none; }  /* 去掉 tooltip 默认小三角 */
+
+  /* ============ 风格化主题（去商务感） ============ */
+  /* 去掉 divIcon 默认白底方块 */
+  .leaflet-div-icon { background: transparent; border: none; }
+  :root {
+    --hand-font: "HanziPen SC","Hannotate SC","STKaiti","楷体-简","KaiTi","华文楷体",sans-serif;
+    --paper: #fbf3e4; --ink: #5a4326;
+  }
+  /* 路线标记：基础为水滴 pin，颜色由 --mk-bg（按天色）注入，形状随主题覆盖 */
+  .route-marker {
+    background: var(--mk-bg); width: 28px; height: 28px;
+    border-radius: 50% 50% 50% 0; transform: rotate(-45deg);
+    border: 2px solid #fff; box-shadow: 0 1px 3px rgba(0,0,0,.4);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .route-marker span { transform: rotate(45deg); color: #fff; font-size: 12px; font-weight: 700; }
+
+  /* 风格切换器 */
+  .style-switch { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 14px; }
+  .style-switch .ss-label { font-size: 12px; color: #8a97a5; margin-right: 2px; }
+  .style-switch button { font-size: 12px; padding: 4px 10px; border: 1px solid #cdd6e0;
+    background: #fff; border-radius: 14px; cursor: pointer; color: #3a4a5a; }
+  .style-switch button.active { background: #4361ee; color: #fff; border-color: #4361ee; }
+
+  /* —— 清新水彩手账 —— */
+  body.theme-watercolor { background: #f7efe0; }
+  body.theme-watercolor .leaflet-tile-pane { filter: sepia(.30) saturate(.92) brightness(1.05) contrast(.94); }
+  body.theme-watercolor .sidebar { background: var(--paper); border-right: 1px solid #e7d9bf; }
+  body.theme-watercolor .sidebar h1 { font-family: var(--hand-font); color: #6b4f2a; }
+  body.theme-watercolor .meta { color: #8a6f4a; }
+  body.theme-watercolor .day { background: #fffaf0; box-shadow: 0 1px 3px rgba(150,120,70,.18); }
+  body.theme-watercolor .day h2 { color: #6b4f2a; }
+  body.theme-watercolor .stop .n { font-family: var(--hand-font); }
+  body.theme-watercolor .route-marker { transform: rotate(-45deg) scale(1.08); }
+  body.theme-watercolor .route-marker span { font-family: var(--hand-font); }
+  body.theme-watercolor .leaflet-overlay-pane path.route-line { filter: url(#wobble); }
+  body.theme-watercolor .mlabel { background:#fffdf7; color:#5a4326; border:1px solid #d8c39a; font-family:var(--hand-font); }
+
+  /* —— 复古探险地图 —— */
+  body.theme-vintage { background: #ecdfc4; }
+  body.theme-vintage .leaflet-tile-pane { filter: sepia(.12) contrast(1.03); }
+  body.theme-vintage .sidebar { background: #f1e4c8; border-right: 1px solid #c9ad7a; }
+  body.theme-vintage .sidebar h1 { font-family: var(--hand-font); color: #5a4326; }
+  body.theme-vintage .meta { color: #7a6240; }
+  body.theme-vintage .day { background: #f7eed6; box-shadow: 0 1px 3px rgba(120,90,40,.2); border: 1px solid #e0cda0; }
+  body.theme-vintage .day h2 { color: #5a4326; }
+  body.theme-vintage .route-marker { border-radius: 50%; border: 2.5px solid #6b4f2a;
+    box-shadow: 0 1px 2px rgba(0,0,0,.3); transform: none; }
+  body.theme-vintage .route-marker span { transform: none; font-family: var(--hand-font); }
+  body.theme-vintage .leaflet-overlay-pane path.route-line { filter: url(#wobbleStrong); }
+  body.theme-vintage .mlabel { background:#f5ecd6; color:#5a4326; border:1px solid #b8975a; font-family:var(--hand-font); }
+  body.theme-vintage .style-switch button.active { background: #6b4f2a; border-color: #6b4f2a; }
+
+  /* —— 日系简笔贴纸 —— */
+  body.theme-sticker { background: #fbfbf9; }
+  body.theme-sticker .leaflet-tile-pane { filter: grayscale(.35) brightness(1.07) contrast(.96); }
+  body.theme-sticker .sidebar { background: #fff; border-right: 1px solid #ececec; }
+  body.theme-sticker .sidebar h1 { font-family: var(--hand-font); color: #444; }
+  body.theme-sticker .day { background: #fff; }
+  body.theme-sticker .route-marker { border-radius: 14px; border: 2px dashed #fff; box-shadow: 0 2px 5px rgba(0,0,0,.18); }
+  body.theme-sticker .route-marker span { font-family: var(--hand-font); }
+  body.theme-sticker .leaflet-overlay-pane path.route-line { filter: url(#wobble); }
+  body.theme-sticker .mlabel { background:#fff; color:#444; border:2px dashed #c9c2b6; font-family:var(--hand-font); }
+  body.theme-sticker .style-switch button.active { background: #118ab2; border-color: #118ab2; }
+
+  /* —— 原版（默认导航风，无滤镜） —— */
+  body.theme-original .style-switch button.active { background: #4361ee; border-color: #4361ee; }
+
+  /* 插画（AI 手绘风，按文件名自动匹配；缺失则自动隐藏，不影响排版） */
+  .cover { width: 100%; border-radius: 10px; margin-bottom: 14px; display: block;
+    box-shadow: 0 2px 8px rgba(0,0,0,.12); }
+  .stop-thumb { width: 100%; height: auto; border-radius: 8px; margin-top: 6px; display: block;
+    box-shadow: 0 1px 4px rgba(0,0,0,.1); }
 </style>
 </head>
 <body>
 <div class="wrap">
+  <svg width="0" height="0" style="position:absolute"><defs>
+    <filter id="wobble"><feTurbulence type="turbulence" baseFrequency="0.012" numOctaves="2" seed="7" result="n"/>
+      <feDisplacementMap in="SourceGraphic" in2="n" scale="4" xChannelSelector="R" yChannelSelector="G"/></filter>
+    <filter id="wobbleStrong"><feTurbulence type="fractalNoise" baseFrequency="0.02" numOctaves="2" seed="3" result="n"/>
+      <feDisplacementMap in="SourceGraphic" in2="n" scale="6"/></filter>
+  </defs></svg>
   <aside class="sidebar" id="sidebar"></aside>
   <div id="map"></div>
 </div>
@@ -403,6 +490,23 @@ var stops = (ITIN.stops || []).map(function(s){ if(s.day!=null) s.day = parseInt
 var markersByIdx = {};
 stops.forEach(function(s,i){ s.__i = i; });
 var sb = document.getElementById('sidebar');
+// 封面插画（illustrations/cover.png，缺失自动隐藏，不阻断排版）
+var cover = document.createElement('img');
+cover.className = 'cover'; cover.src = 'illustrations/cover.png'; cover.alt = '封面插画';
+cover.onerror = function(){ cover.style.display = 'none'; };
+sb.appendChild(cover);
+// 风格切换器（水彩手账 / 复古探险 / 简笔贴纸 / 原版），选择记 localStorage
+var ss = document.createElement('div'); ss.className = 'style-switch'; ss.id = 'styleSwitch';
+ss.innerHTML = '<span class="ss-label">风格</span>'
+  + '<button data-theme="watercolor">水彩手账</button>'
+  + '<button data-theme="vintage">复古探险</button>'
+  + '<button data-theme="sticker">简笔贴纸</button>'
+  + '<button data-theme="original">原版</button>';
+ss.addEventListener('click', function(e){
+  var t = e.target.getAttribute && e.target.getAttribute('data-theme');
+  if (t) applyTheme(t);
+});
+sb.appendChild(ss);
 var h1 = document.createElement('h1'); h1.textContent = trip.title || '旅行行程'; sb.appendChild(h1);
 var meta = document.createElement('div'); meta.className = 'meta';
 meta.innerHTML = [trip.destination, trip.start_date, trip.days ? trip.days+'天' : '', trip.travelers, trip.budget, trip.theme]
@@ -434,6 +538,13 @@ Object.keys(byDay).map(Number).sort(function(a,b){ return a-b; }).forEach(functi
     var html = '<span class="t">'+(s.time||'')+'</span><span class="n">'+esc(s.name)+'</span>';
     if (s.note) html += '<span class="note">'+esc(s.note)+'</span>';
     el.innerHTML = html; body.appendChild(el);
+    // 每站手绘插画缩略图（按站名匹配 illustrations/<站名>.png，缺失自动隐藏）
+    var thumb = document.createElement('img');
+    thumb.className = 'stop-thumb';
+    thumb.src = 'illustrations/' + encodeURIComponent(s.name) + '.png';
+    thumb.alt = s.name;
+    thumb.onerror = function(){ thumb.style.display = 'none'; };
+    el.appendChild(thumb);
   });
   sec.appendChild(body);
   // 折叠/展开：点击当天标题切换，箭头同步
@@ -471,9 +582,9 @@ function draw(){
     if (s.lat == null || s.lng == null) return;
     var ll = coordOf(s); pts.push(ll);
     var color = DAYCOLORS[s.day] || '#4361ee';
-    var icon = L.divIcon({ className: '', html:
-      '<div style="background:'+color+';width:26px;height:26px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;"><span style="transform:rotate(45deg);color:#fff;font-size:12px;font-weight:700;">'+s.day+'</span></div>',
-      iconSize: [26,26], iconAnchor: [13,26] });
+    var icon = L.divIcon({ className: 'route-marker-wrap', html:
+      '<div class="route-marker" style="--mk-bg:'+color+'"><span>'+s.day+'</span></div>',
+      iconSize: [28,28], iconAnchor: [14,28] });
     var popup = '<div class="pop-title">第'+s.day+'天 '+(s.time||'')+' · '+esc(s.name)+'</div>'+(s.note?'<div class="pop-note">'+esc(s.note)+'</div>':'');
     var mk = L.marker(ll, { icon: icon }).addTo(routeLayer).bindPopup(popup);
     markersByIdx[s.__i] = mk;
@@ -481,7 +592,7 @@ function draw(){
     // 常驻名称标签：每个数字标记旁直接显示景点名（无需点击）
     mk.bindTooltip(esc(s.name), { permanent: true, direction: 'right', offset: [10, 0], className: 'mlabel' });
     // 连续实线：按序连接所有站点（跨天也连），形成完整路线而非分段断线
-    if (prev) L.polyline([prev, ll], { color: color, weight: 4, opacity: .85 }).addTo(routeLayer);
+    if (prev) L.polyline([prev, ll], { color: color, weight: 4, opacity: .85, className: 'route-line' }).addTo(routeLayer);
     prev = ll;
   });
   // 环线闭合：若首末站点同名（出发地=返程地），用虚线把终点连回起点
@@ -490,7 +601,7 @@ function draw(){
     var lIdx = -1;
     for (var i = stops.length - 1; i >= 0; i--) { if (stops[i].lat != null && stops[i].lng != null) { lIdx = i; break; } }
     if (fIdx >= 0 && lIdx >= 0 && stops[fIdx].name === stops[lIdx].name) {
-      L.polyline([pts[pts.length - 1], pts[0]], { color: DAYCOLORS[stops[fIdx].day] || '#4361ee', weight: 4, opacity: .85, dashArray: '2,8' }).addTo(routeLayer);
+      L.polyline([pts[pts.length - 1], pts[0]], { color: DAYCOLORS[stops[fIdx].day] || '#4361ee', weight: 4, opacity: .85, dashArray: '2,8', className: 'route-line' }).addTo(routeLayer);
     }
   }
   window.__PTS__ = pts;
@@ -500,7 +611,34 @@ function fitAll(){
 }
 window.__setBasemap__ = function(i){ applyBasemap(i); draw(); fitAll(); };
 window.__basemapId__ = function(){ return BASEMAPS[basemapIndex].id; };
-applyBasemap(0); draw(); fitAll();
+// ---- 风格主题：定义与切换（去商务感，多风格可切换） ----
+var THEME_DEFAULT_BM = '__DEF_BM__';
+var THEMES = {
+  original:   { bm: THEME_DEFAULT_BM },
+  watercolor: { bm: THEME_DEFAULT_BM },
+  sticker:    { bm: THEME_DEFAULT_BM },
+  vintage:    { bm: 'esri_physical' }
+};
+function applyTheme(name){
+  if (!THEMES[name]) name = 'original';
+  document.body.className = 'theme-' + name;
+  var cfg = THEMES[name];
+  var idx = BASEMAPS.findIndex(function(b){ return b.id === cfg.bm; });
+  if (idx < 0) idx = 0;
+  if (BASEMAPS[basemapIndex].id !== cfg.bm) window.__setBasemap__(idx);
+  try { localStorage.setItem('tripweaver-theme', name); } catch (e) {}
+  var btns = document.querySelectorAll('#styleSwitch button');
+  for (var i = 0; i < btns.length; i++) {
+    btns[i].classList.toggle('active', btns[i].getAttribute('data-theme') === name);
+  }
+}
+// 初始：读取上次选择（默认水彩手账）
+var initialTheme = 'watercolor';
+try { var _saved = localStorage.getItem('tripweaver-theme'); if (_saved) initialTheme = _saved; } catch (e) {}
+var _initIdx = BASEMAPS.findIndex(function(b){ return b.id === THEMES[initialTheme].bm; });
+if (_initIdx < 0) _initIdx = 0;
+window.__setBasemap__(_initIdx);   // 设底图 + draw() + fitAll()
+applyTheme(initialTheme);          // 设主题类 + 按钮高亮（底图已一致，不再重切）
 // ---- 左→右联动：点击左侧站点，地图飞到对应标记并弹窗；右→左高亮反联动 ----
 function focusStop(i){
   var mk = markersByIdx[i]; if (!mk) return;
@@ -573,6 +711,7 @@ def build_html(itin, basemap_ids):
             .replace("__DATA__", data_json)
             .replace("__DAYCOLORS__", json.dumps(day_color, ensure_ascii=False))
             .replace("__BASEMAPS__", json.dumps(basemaps, ensure_ascii=False))
+            .replace("__DEF_BM__", basemap_ids[0])
             .replace("__TITLE__", title))
 
 
@@ -591,6 +730,18 @@ def resolve_basemaps(itin):
     if domestic >= len(coords) / 2:
         return ["amap", "osm"]
     return ["osm", "carto"]
+
+
+def plan_basemaps(itin):
+    """返回传入 HTML 的底图切换列表（含 esri_physical，供「复古探险」风格切换）。
+
+    国内行程把高德放首位（中文路网全），境外把 OSM 放首位；esri_physical 始终在列表内，
+    无论哪种风格都能在 amap/osm/esri 间自由切换。__setBasemap__ 的自动回退仍按列表顺序。
+    """
+    primary = resolve_basemaps(itin)[0]
+    if primary == "amap":
+        return ["amap", "esri_physical", "osm", "carto"]
+    return ["osm", "carto", "esri_physical", "amap"]
 
 
 def launch_browser(playwright):
@@ -637,7 +788,20 @@ def verify_and_render(html_path, png_path, itin, want_png, basemap_count=1):
         report.append(f"ℹ️ 渲染引擎: {engine}")
         page = browser.new_page(viewport={"width": 1600, "height": 1000})
         page.on("pageerror", lambda e: errors.append(str(e)))
-        page.on("console", lambda m: errors.append(f"console.{m.type}: {m.text}") if m.type == "error" else None)
+
+        # 控制台错误分两类：
+        #   - 真实 JS 异常（pageerror 与 console.error 的非资源类）→ 阻断
+        #   - 资源 404（如尚未生成的插画 illustrations/<站名>.png）→ 由 onerror 优雅隐藏，
+        #     属预期，不计入致命错误，否则会误伤「未给每个站点都配插画」的正常情况
+        def _on_console(m):
+            if m.type != "error":
+                return
+            txt = m.text
+            if ("Failed to load resource" in txt or "ERR_FILE_NOT_FOUND" in txt
+                    or txt.startswith("net::") or "ERR_" in txt):
+                return
+            errors.append(f"console.error: {txt}")
+        page.on("console", _on_console)
         page.goto("file://" + str(html_path))
         try:
             page.wait_for_load_state("networkidle", timeout=8000)  # 等瓦片基本加载完
@@ -922,10 +1086,9 @@ def main():
         for k in ("_src", "_meta"):  # 内部字段不进入页面数据
             s.pop(k, None)
 
-    basemap_ids = resolve_basemaps(itin)
-    print(f"\n--- 底图 ---\n  主底图: {basemap_ids[0]}"
-          + (f"（备用回退: {basemap_ids[1]}）" if len(basemap_ids) > 1 else "")
-          + "  [可用 trip.basemap: amap|osm|carto 覆盖]")
+    basemap_ids = plan_basemaps(itin)
+    print(f"\n--- 底图 ---\n  主底图: {basemap_ids[0]}（可在地图页「风格」切换: {', '.join(basemap_ids)}；"
+          + "  页面内亦支持 watercolor/vintage/sticker/original 风格切换，[可用 trip.basemap: amap|osm|carto|esri_physical 覆盖]）")
 
     html = build_html(itin, basemap_ids)
     html_path = out / "travel_map.html"

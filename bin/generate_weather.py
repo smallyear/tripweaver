@@ -66,6 +66,33 @@ WMO = {
 
 UA = "travel-planner/1.0 (workbuddy; +https://www.workbuddy.cn)"
 
+# 与地图页共享的风格系统（四套主题 + 同一 localStorage 键），保证三个页面风格联动。
+THEME_CSS = """:root{--hand-font:"HanziPen SC","Hannotate SC","STKaiti","楷体-简","KaiTi","华文楷体",sans-serif;--accent:#3b82f6;}
+body.theme-watercolor{background:#f7efe0;--accent:#c9a25a;}
+body.theme-watercolor h1,body.theme-watercolor .tips h2{font-family:var(--hand-font);color:#6b4f2a;}
+body.theme-vintage{background:#ecdfc4;--accent:#6b4f2a;}
+body.theme-vintage h1,body.theme-vintage .tips h2{font-family:var(--hand-font);color:#5a4326;}
+body.theme-sticker{background:#fbfbf9;--accent:#118ab2;}
+body.theme-sticker h1,body.theme-sticker .tips h2{font-family:var(--hand-font);}
+body.theme-watercolor .tips,body.theme-vintage .tips,body.theme-sticker .tips{border-left-color:var(--accent);}
+body.theme-watercolor .bar button,body.theme-vintage .bar button,body.theme-sticker .bar button{background:var(--accent);}
+.style-switch{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:0 0 16px;}
+.style-switch .ss-label{font-size:12px;color:#8a97a5;margin-right:2px;}
+.style-switch button{font-size:12px;padding:4px 10px;border:1px solid #cdd6e0;background:#fff;border-radius:14px;cursor:pointer;color:#3a4a5a;}
+.style-switch button.active{background:var(--accent);color:#fff;border-color:var(--accent);}"""
+
+THEME_BAR = """<div class="style-switch" id="styleSwitch"><span class="ss-label">风格</span><button data-t="watercolor">水彩手账</button><button data-t="vintage">复古探险</button><button data-t="sticker">简笔贴纸</button><button data-t="original">原版</button></div>"""
+
+THEME_JS = """<script>(function(){
+ var SW=document.getElementById('styleSwitch');
+ function applyTheme(name){ if(!name)name='original'; document.body.className='theme-'+name;
+  if(SW){var b=SW.querySelectorAll('button');for(var i=0;i<b.length;i++)b[i].classList.toggle('active',b[i].getAttribute('data-t')===name);}
+  try{localStorage.setItem('tripweaver-theme',name);}catch(e){} }
+ if(SW){SW.addEventListener('click',function(e){var t=e.target.getAttribute&&e.target.getAttribute('data-t');if(t)applyTheme(t);});}
+ var saved='watercolor';try{var s=localStorage.getItem('tripweaver-theme');if(s)saved=s;}catch(e){}
+ applyTheme(saved);
+})();</script>"""
+
 
 class OutOfWindow(Exception):
     """请求的日期超出 Open-Meteo 预报窗口（约 16 天），并非网络错误。"""
@@ -388,19 +415,24 @@ def main():
   .tips li {{ margin:4px 0; font-size:14px; }}
   .foot {{ color:#9aa5b1; font-size:12px; margin-top:20px; }}
   @media print {{ body {{ background:#fff; padding:0; }} .page {{ box-shadow:none; }} }}
+__THEME_CSS__
 </style></head>
 <body><div class="page">
+  __THEME_BAR__
   <h1>{esc(title)} · 天气预报</h1>
   <div class="sub">{esc(destination)} ｜ 出发 {start_date.isoformat()} ｜ 共 {days} 天 ｜ 生成于 {today.isoformat()}</div>
   {''.join(body)}
   <div class="tips"><h2>出行提示</h2><ul>{tips_html}</ul></div>
   <div class="foot">数据来源：Open-Meteo（免密钥实时预报）。天气随时间更新，出发前 1–2 天请再看一次。</div>
-</div></body></html>"""
+</div>__THEME_JS__</body></html>"""
 
     import os
 
     os.makedirs(args.out, exist_ok=True)
     out_path = os.path.join(args.out, "weather.html")
+    html = (html.replace("__THEME_CSS__", THEME_CSS)
+            .replace("__THEME_BAR__", THEME_BAR)
+            .replace("__THEME_JS__", THEME_JS))
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html)
 

@@ -13,6 +13,36 @@ import json
 from pathlib import Path
 
 
+# 与地图页共享的风格系统：四套主题（水彩手账 / 复古探险 / 简笔贴纸 / 原版），
+# 用同一 localStorage 键 tripweaver-theme，三个页面风格联动。
+THEME_CSS = """:root{--hand-font:"HanziPen SC","Hannotate SC","STKaiti","楷体-简","KaiTi","华文楷体",sans-serif;--accent:#4361ee;}
+body.theme-watercolor{background:#f7efe0;--accent:#c9a25a;}
+body.theme-watercolor h1,body.theme-watercolor h2{font-family:var(--hand-font);color:#6b4f2a;}
+body.theme-vintage{background:#ecdfc4;--accent:#6b4f2a;}
+body.theme-vintage h1,body.theme-vintage h2{font-family:var(--hand-font);color:#5a4326;}
+body.theme-sticker{background:#fbfbf9;--accent:#118ab2;}
+body.theme-sticker h1,body.theme-sticker h2{font-family:var(--hand-font);}
+body.theme-watercolor h2,body.theme-vintage h2,body.theme-sticker h2{border-left-color:var(--accent);}
+body.theme-watercolor .bar button,body.theme-vintage .bar button,body.theme-sticker .bar button{background:var(--accent);}
+body.theme-watercolor .ck input,body.theme-vintage .ck input,body.theme-sticker .ck input{accent-color:var(--accent);}
+.style-switch{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:0 0 14px;}
+.style-switch .ss-label{font-size:12px;color:#8a97a5;margin-right:2px;}
+.style-switch button{font-size:12px;padding:4px 10px;border:1px solid #cdd6e0;background:#fff;border-radius:14px;cursor:pointer;color:#3a4a5a;}
+.style-switch button.active{background:var(--accent);color:#fff;border-color:var(--accent);}"""
+
+THEME_BAR = """<div class="style-switch" id="styleSwitch"><span class="ss-label">风格</span><button data-t="watercolor">水彩手账</button><button data-t="vintage">复古探险</button><button data-t="sticker">简笔贴纸</button><button data-t="original">原版</button></div>"""
+
+THEME_JS = """<script>(function(){
+ var SW=document.getElementById('styleSwitch');
+ function applyTheme(name){ if(!name)name='original'; document.body.className='theme-'+name;
+  if(SW){var b=SW.querySelectorAll('button');for(var i=0;i<b.length;i++)b[i].classList.toggle('active',b[i].getAttribute('data-t')===name);}
+  try{localStorage.setItem('tripweaver-theme',name);}catch(e){} }
+ if(SW){SW.addEventListener('click',function(e){var t=e.target.getAttribute&&e.target.getAttribute('data-t');if(t)applyTheme(t);});}
+ var saved='watercolor';try{var s=localStorage.getItem('tripweaver-theme');if(s)saved=s;}catch(e){}
+ applyTheme(saved);
+})();</script>"""
+
+
 def esc(t):
     return html.escape("" if t is None else str(t), quote=True)
 
@@ -108,10 +138,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     .bar { display: none; }
   }
   @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
+__THEME_CSS__
 </style>
 </head>
 <body>
 <div class="bar"><button onclick="window.print()">打印 / 导出 PDF</button></div>
+__THEME_BAR__
 __BODY__
 <script>
   // 勾选状态本地记忆，刷新不丢失
@@ -121,6 +153,7 @@ __BODY__
     cb.addEventListener('change', function(){ localStorage.setItem(k, cb.checked ? '1' : '0'); });
   });
 </script>
+__THEME_JS__
 </body>
 </html>
 """
@@ -147,7 +180,9 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     out_path = out / "checklist.html"
     out_path.write_text(
-        HTML_TEMPLATE.replace("__BODY__", body).replace("__TITLE__", title),
+        HTML_TEMPLATE.replace("__BODY__", body).replace("__TITLE__", title)
+        .replace("__THEME_CSS__", THEME_CSS).replace("__THEME_BAR__", THEME_BAR)
+        .replace("__THEME_JS__", THEME_JS),
         encoding="utf-8",
     )
     print(f"✅ Checklist: {out_path}")
