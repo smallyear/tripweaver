@@ -201,6 +201,10 @@ def key_map_labels(stops, max_n=5):
     rest = [s for s in cands if s is not first]
     while len(picked) < max_n and rest:
         nxt = max(rest, key=lambda s: min(dist(s, p) for p in picked))
+        # 城市行程里多个点相隔不到 2km，全画出来在整城尺度上必然叠字；
+        # 宁可少一两个标签，也不要在市中心糊成一团。
+        if min(dist(nxt, p) for p in picked) < 0.0225:
+            break
         picked.append(nxt)
         rest.remove(nxt)
     return [s["name"] for s in picked]
@@ -258,14 +262,25 @@ def render_map_shots(itin, shots, out_dir):
                             : window.__PTS__;
                         if (!pts || !pts.length) pts = window.__PTS__;
                         if (!pts || !pts.length) return 'no-points';
-                        if (pts.length === 1) {
-                            m.setView(pts[0], a.singleZoom || 12);
-                        } else {
-                            m.fitBounds(pts, {padding: [Math.round(a.w * 0.04), Math.round(a.h * 0.05)]});
-                        }
+                        // 视口尺寸刚变过，立刻 fit 会按旧尺寸算缩放；延后再 fit 一次才准
+                        // 海报只留少数标签，留白要更大，否则边缘标签会被 .mapbox 裁掉
+                        var pad = a.key
+                            ? [Math.round(a.w * 0.08), Math.round(a.h * 0.11)]
+                            : [Math.round(a.w * 0.04), Math.round(a.h * 0.05)];
+                        var refit = function(){
+                            m.invalidateSize();
+                            if (pts.length === 1) {
+                                m.setView(pts[0], a.singleZoom || 12);
+                            } else {
+                                m.fitBounds(pts, {padding: pad});
+                            }
+                        };
+                        refit();
+                        setTimeout(refit, 300);
                         return 'ok';
                     }""",
-                    {"w": shot["w"], "h": shot["h"], "days": shot.get("days")},
+                    {"w": shot["w"], "h": shot["h"], "days": shot.get("days"),
+                     "key": bool(shot.get("key_names"))},
                 )
                 page.wait_for_timeout(1100)
                 tiles = page.evaluate("() => document.querySelectorAll('#map img.leaflet-tile-loaded').length")
@@ -274,6 +289,7 @@ def render_map_shots(itin, shots, out_dir):
                 if shot.get("key_names"):
                     page.evaluate(
                         """(keep) => {
+                            if (window.__keepLabels__) { window.__keepLabels__(keep); return; }
                             document.querySelectorAll('.leaflet-tooltip.mlabel').forEach(function(el){
                                 if (keep.indexOf(el.textContent) < 0) el.style.display = 'none';
                             });
@@ -385,8 +401,10 @@ def build_daily_poster(day, day_stops, sd, illu_dir, trip=None):
     # 当日站点最多展示 4 条，避免长行程撑出画面；超长站名省略号截断
     shown = day_stops[:4]
     keywords = "".join(
-        f'<div class="kw"><span class="dot"></span><span class="kwname">{esc(s["name"])}'
-        f'{(" · " + esc(s["time"])) if s.get("time") else ""}</span></div>'
+        f'<div class="kw"><span class="dot"></span>'
+        f'<span class="kwname">{esc(s["name"])}</span>'
+        f'{("<span class=\"kwtime\">" + esc(s["time"]) + "</span>") if s.get("time") else ""}'
+        f'</div>'
         for s in shown
     )
     if len(day_stops) > len(shown):
@@ -421,6 +439,7 @@ def build_daily_poster(day, day_stops, sd, illu_dir, trip=None):
     .kws{margin:6px auto 0;width:680px;}
     .kw{font-size:32px;color:#5a4f40;margin:12px 0;display:flex;align-items:center;}
     .kwname{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    .kwtime{flex:0 0 auto;margin-left:14px;font-size:26px;color:#9a8360;}
     .kw.more{font-size:26px;color:#a08b66;}
     .dot{width:14px;height:14px;border-radius:50%;background:__ACC__;margin-right:18px;flex:0 0 auto;}
     .foot{position:absolute;bottom:46px;left:0;right:0;text-align:center;font-size:24px;color:#b3a081;}
@@ -431,6 +450,8 @@ def build_daily_poster(day, day_stops, sd, illu_dir, trip=None):
     .poster.noimg .stamp-line{width:220px;height:3px;background:__ACC__;opacity:.55;margin:32px auto;}
     .poster.noimg .stamp-sub{font-size:30px;color:#8a7558;letter-spacing:2px;}
     .poster.noimg .title{margin-top:34px;}
+    /* 无插画时邮戳里已经写了城市名，标题下的地区行重复，隐掉 */
+    .poster.noimg .sub{display:none;}
     """
     css = css.replace("__ACC__", accent).replace("__TITLE_SIZE__", str(tsize))
     body = f"""
@@ -651,13 +672,36 @@ def build_map_poster(itin, map_ref, days_map, sd):
 # ---------------------------------------------------------------------------
 # 形态 5：每日地图卡（1080x1350，当日路线 + 站点时间）
 # ---------------------------------------------------------------------------
+def day_map_layout(day_stops):
+    """按当天站点数算出地图高度与字号缩放（卡片固定 1080x1350）。
+
+    地图卡上半是地图、下半是站点列表；站点多时只压缩地图不会溢出，
+    因为 .list 是绝对定位的固定高度。返回 (map_h, scale, need)。
+    """
+    need = 0.0
+    for x in day_stops[:6]:
+        need += 52.0  # 一行「时间 + 站名」实际占位：40px 行高 + 12px 间距
+        note = (x.get("note") or "").strip()
+        if note:
+            need += 36.0 * max(1, math.ceil(len(note) / 36))  # 每行约 36 字
+    map_h = int(max(420, min(780, 1350 - 236 - 110 - need - 18)))
+    avail = 1350 - 236 - 110 - map_h
+    scale = min(1.0, avail / need) if need > avail else 1.0
+    return map_h, round(max(0.86, scale), 3), need
+
+
 def build_day_map_card(day, day_stops, sd, map_ref, trip):
     accent = DAY_COLORS[(day - 1) % len(DAY_COLORS)]
     date = day_date(sd, day)
+    map_h, scale, _ = day_map_layout(day_stops)
+    list_top = 236 + map_h
+    st_f, st_mb = round(28 * scale, 1), round(12 * scale, 1)
+    nt_f, nt_mb = round(21 * scale, 1), round(12 * scale, 1)
     scenic = [x for x in day_stops
               if not any(k in x["name"] for k in ("机场", "县城", "服务区", "车站", "酒店"))
               and not x["name"].endswith("市")]
-    headline = scenic[-1] if scenic else (day_stops[-1] if day_stops else day_stops[0])
+    # 优先当天第一个景点：城市日会命中主活动（如宽窄巷子），转移日自然落到目的地（如聊城古城）
+    headline = scenic[0] if scenic else (day_stops[-1] if day_stops else day_stops[0])
     region = headline.get("region", "")
     theme = ((trip.get("theme") or "").replace("／", "/").split("/")[0]).strip()
 
@@ -675,19 +719,22 @@ def build_day_map_card(day, day_stops, sd, map_ref, trip):
     .date{display:inline-block;margin-left:16px;font-size:26px;color:#8a7558}
     .headline{font-size:__NSIZE__px;line-height:1.2;margin-top:14px}
     .region{font-size:24px;color:#8a7558;margin-top:6px}
-    .mapbox{position:absolute;left:0;top:236px;width:100%;height:780px;overflow:hidden}
+    .mapbox{position:absolute;left:0;top:236px;width:100%;height:__MAPH__px;overflow:hidden}
     .mapbox img{width:100%;height:100%;object-fit:cover;display:block}
     .mapveil{position:absolute;inset:0;
       background:linear-gradient(180deg,rgba(247,239,224,0) 82%,rgba(247,239,224,.95) 100%)}
-    .list{position:absolute;left:60px;right:60px;top:1046px;bottom:110px;
+    .list{position:absolute;left:60px;right:60px;top:__LISTTOP__px;bottom:110px;
       display:flex;flex-direction:column;justify-content:center}
-    .st{font-size:28px;margin-bottom:12px}
+    .st{font-size:__STF__px;margin-bottom:__STMB__px}
     .st .t{color:__ACC__;margin-right:14px;font-variant-numeric:tabular-nums}
     .st .n{color:#4a4036}
-    .note{font-size:21px;color:#9a8360;margin:-6px 0 12px 74px;line-height:1.4}
+    .note{font-size:__NTF__px;color:#9a8360;margin:-6px 0 __NTMB__px 74px;line-height:1.4}
     .foot{position:absolute;bottom:34px;left:0;right:0;text-align:center;font-size:22px;color:#b3a081}
     """
-    css = css.replace("__ACC__", accent).replace("__NSIZE__", str(nsize))
+    css = (css.replace("__ACC__", accent).replace("__NSIZE__", str(nsize))
+              .replace("__MAPH__", str(map_h)).replace("__LISTTOP__", str(list_top))
+              .replace("__STF__", str(st_f)).replace("__STMB__", str(st_mb))
+              .replace("__NTF__", str(nt_f)).replace("__NTMB__", str(nt_mb)))
     body = f"""
       <div class="hd">
         <div><span class="badge">DAY {day}</span><span class="date">{esc(date)}</span></div>
@@ -779,6 +826,21 @@ CHECK_JS = """() => {
     }
     if (r.right > fr.right + tol) {
       over.push((el.className || el.tagName) + ' 右溢出 ' + Math.round(r.right - fr.right) + 'px');
+    }
+  });
+  // 固定高度的容器（.list/.cells 等）里内容超长时，容器本身不会越界，
+  // 只能靠首个/末个子元素的位置判断，否则文字溢出会被漏检。
+  document.querySelectorAll('.list,.cells,.kws,.days').forEach(el => {
+    const er = el.getBoundingClientRect();
+    const last = el.lastElementChild;
+    if (!last) return;
+    const lr = last.getBoundingClientRect();
+    const first = el.firstElementChild.getBoundingClientRect();
+    if (lr.bottom > er.bottom + tol) {
+      over.push(el.className + ' 内容下溢出 ' + Math.round(lr.bottom - er.bottom) + 'px');
+    }
+    if (first.top < er.top - tol) {
+      over.push(el.className + ' 内容上溢出 ' + Math.round(er.top - first.top) + 'px');
     }
   });
   const foot = document.querySelector('.foot');
@@ -909,7 +971,8 @@ def main():
                       "key_names": key_map_labels(stops)})
     if "mapday" in types:
         for d in sorted([x for x in days_map if x]):
-            shots.append({"name": f"day{d:02d}", "w": 1080, "h": 780, "days": [d]})
+            shots.append({"name": f"day{d:02d}", "w": 1080, "h": day_map_layout(days_map[d])[0],
+                          "days": [d]})
 
     refs, map_engine, map_err = ({}, None, "")
     if shots:
