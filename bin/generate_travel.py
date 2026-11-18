@@ -623,6 +623,7 @@ function draw(){
     var popup = '<div class="pop-title">第'+s.day+'天 '+(s.time||'')+' · '+esc(s.name)+'</div>'+(s.note?'<div class="pop-note">'+esc(s.note)+'</div>':'');
     var mk = L.marker(ll, { icon: icon }).addTo(routeLayer).bindPopup(popup);
     mk._day = s.day;
+    mk._name = s.name;
     markersByIdx[s.__i] = mk;
     mk.on('click', function(){ highlightSidebar(s.__i); });  // 地图→左侧反联动
     // 常驻名称标签：每个数字标记旁直接显示景点名（无需点击）
@@ -671,10 +672,20 @@ function declutterLabels(){
   els.forEach(function(el){
     var b = el.getBoundingClientRect();
     var w = b.width, h = b.height;
-    var offs = [[0,0],[0,-(h+4)],[0,h+4],[-(w+18),0],[0,-(h*2+8)],[0,h*2+8],[-(w+18),-(h+4)],[-(w+18),h+4]];
+    // 候选位置按「离原位由近到远」排：右侧 → 上下 → 左翻 → 再远一圈，
+    // 城市行程一天 5–6 个点挤在 1km 内时，只有 8 个候选位常常全被占满。
+    var cands = [];
+    [-2,-1,0,1,2].forEach(function(ry){
+      [-1,0,1].forEach(function(rx){
+        var dx = rx === 0 ? 0 : rx * (w + 18);
+        var dy = ry === 0 ? 0 : ry * (h + 5);
+        cands.push({dx:dx, dy:dy, d:Math.abs(dx) + Math.abs(dy) * 1.4});
+      });
+    });
+    cands.sort(function(a,b){ return a.d - b.d; });
     var pick = null;
-    for (var i=0;i<offs.length;i++){
-      var ox=offs[i][0], oy=offs[i][1];
+    for (var i=0;i<cands.length;i++){
+      var ox=cands[i].dx, oy=cands[i].dy;
       var r={left:b.left+ox, right:b.right+ox, top:b.top+oy, bottom:b.bottom+oy};
       // 不能超出地图可视区（用地图自身矩形，否则会被左侧栏遮住）
       if (r.left < mr.left+2 || r.right > mr.right-2 || r.top < mr.top+2 || r.bottom > mr.bottom-2) continue;
@@ -707,6 +718,17 @@ window.__filterDay__ = function(days){
   if (window.__declutter__) window.__declutter__();
 };
 window.__basemapId__ = function(){ return BASEMAPS[basemapIndex].id; };
+// 只保留指定站点的标记与标签（整趟地图海报用：标签与圆点一起精简，否则市中心仍是一坨）
+window.__keepLabels__ = function(keep){
+  routeLayer.eachLayer(function(layer){
+    if (!layer._name) return;
+    var on = keep.indexOf(layer._name) >= 0;
+    if (layer._icon) layer._icon.style.display = on ? '' : 'none';
+    var tip = layer.getTooltip && layer.getTooltip();
+    if (tip && tip.getElement()) tip.getElement().style.display = on ? '' : 'none';
+  });
+  if (window.__declutter__) window.__declutter__();
+};
 // ---- 风格主题：定义与切换（去商务感，多风格可切换） ----
 var THEME_DEFAULT_BM = '__DEF_BM__';
 var THEMES = {
