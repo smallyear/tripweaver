@@ -147,22 +147,63 @@ def _prepare_map_itin(mod, itin):
             s["lng_gcj"], s["lat_gcj"] = glng, glat
 
 
+def route_aspect(stops):
+    """路线包围盒宽高比（经度按中心纬度修正），用于决定地图画幅高矮。"""
+    pts = [(float(s["lng"]), float(s["lat"])) for s in stops
+           if s.get("lat") is not None and s.get("lng") is not None]
+    if len(pts) < 2:
+        return 1.0
+    lngs = [x[0] for x in pts]
+    lats = [x[1] for x in pts]
+    lat_span = max(lats) - min(lats)
+    lng_span = max(lngs) - min(lngs)
+    if lat_span < 1e-6:
+        return 3.0
+    mid = math.radians((max(lats) + min(lats)) / 2)
+    return max(0.2, (lng_span * math.cos(mid)) / lat_span)
+
+
+def poster_map_height(stops):
+    """海报地图高度：宽路线给矮横幅，南北向路线给高画幅，避免大片空白。"""
+    return int(max(520, min(1100, 1080 / route_aspect(stops))))
+
+
 def key_map_labels(stops, max_n=5):
-    """整趟海报用：每天挑一个有代表性的景点名，总量封顶（避免 1080 宽下标签糊成一团）。"""
+    """整趟海报的标签：跳过机场/县城，再用「最远点采样」让标签在地理上铺开。
+
+    按天挑一个在密集路线（如蓬莱/烟台 5 站）会全挤在一处，改为每次挑离已选点最远的站。
+    """
     skip = ("机场", "县城", "服务区", "车站", "酒店")
-    picked, seen = [], set()
+    cands, seen = [], set()
     for s in stops:
         name = s.get("name") or ""
-        if not name or name.endswith("市") or any(k in name for k in skip):
+        if (not name or len(name) > 10 or name.endswith("市")
+                or any(k in name for k in skip)
+                or s.get("lat") is None or s.get("lng") is None):
             continue
-        if s.get("day") in seen:
+        if name in seen:
             continue
-        seen.add(s.get("day"))
-        picked.append(name)
-    if len(picked) > max_n:
-        step = len(picked) / max_n
-        picked = [picked[int(i * step)] for i in range(max_n)]
-    return picked
+        seen.add(name)
+        cands.append(s)
+    if len(cands) <= max_n:
+        return [s["name"] for s in cands]
+
+    def dist(a, b):
+        dx = (a["lng"] - b["lng"]) * math.cos(math.radians((a["lat"] + b["lat"]) / 2))
+        dy = a["lat"] - b["lat"]
+        return math.hypot(dx, dy)
+
+    cx = sum(s["lng"] for s in cands) / len(cands)
+    cy = sum(s["lat"] for s in cands) / len(cands)
+    center = {"lng": cx, "lat": cy}
+    first = min(cands, key=lambda s: dist(s, center))
+    picked = [first]
+    rest = [s for s in cands if s is not first]
+    while len(picked) < max_n and rest:
+        nxt = max(rest, key=lambda s: min(dist(s, p) for p in picked))
+        picked.append(nxt)
+        rest.remove(nxt)
+    return [s["name"] for s in picked]
 
 
 def render_map_shots(itin, shots, out_dir):
@@ -554,7 +595,10 @@ def build_map_poster(itin, map_ref, days_map, sd):
         row_heights.append(30 + lines * 39 + 8)
     col_rows = [max(row_heights[i:i + cols]) for i in range(0, len(row_heights), cols)]
     days_h = sum(col_rows) + 24 * max(0, rows - 1)
-    H = max(1920, 1460 + days_h + 120)
+    map_h = poster_map_height(itin.get("stops") or [])
+    rule_y = 300 + map_h + 26
+    days_top = rule_y + 26
+    H = max(1440, days_top + days_h + 110)
 
     cells = ""
     for d in days_sorted:
@@ -573,12 +617,12 @@ def build_map_poster(itin, map_ref, days_map, sd):
       border:2px dashed #c9b48c;border-radius:12px;padding:12px 0;transform:rotate(4deg);color:#8a7558}
     .stamp b{display:block;font-size:34px;color:#a2693a;font-weight:400}
     .stamp span{font-size:20px}
-    .mapbox{position:absolute;left:0;top:300px;width:100%;height:1100px;overflow:hidden}
+    .mapbox{position:absolute;left:0;top:300px;width:100%;height:__MAPH__px;overflow:hidden}
     .mapbox img{width:100%;height:100%;object-fit:cover;display:block}
     .mapveil{position:absolute;inset:0;
       background:linear-gradient(180deg,rgba(247,239,224,0) 74%,rgba(247,239,224,.95) 100%)}
-    .rule{position:absolute;left:56px;right:56px;top:1432px;height:3px;background:#c98a4b;opacity:.45;border-radius:3px}
-    .days{position:absolute;left:52px;right:52px;top:1460px;bottom:100px;display:grid;
+    .rule{position:absolute;left:56px;right:56px;top:__RULE__px;height:3px;background:#c98a4b;opacity:.45;border-radius:3px}
+    .days{position:absolute;left:52px;right:52px;top:__DAYSTOP__px;bottom:100px;display:grid;
       grid-template-columns:repeat(__COLS__,1fr);column-gap:34px;row-gap:24px;
       align-content:center}
     .day{display:flex;gap:14px;align-items:flex-start;break-inside:avoid}
@@ -588,7 +632,8 @@ def build_map_poster(itin, map_ref, days_map, sd):
     .foot{position:absolute;bottom:40px;left:0;right:0;text-align:center;font-size:24px;color:#b3a081}
     """
     css = (css.replace("__TSIZE__", str(tsize)).replace("__COLS__", str(cols))
-              .replace("__NSIZE__", str(nsize)))
+              .replace("__NSIZE__", str(nsize)).replace("__MAPH__", str(map_h))
+              .replace("__RULE__", str(rule_y)).replace("__DAYSTOP__", str(days_top)))
     body = f"""
       <div class="head">
         <div class="kicker">旅 途 手 账</div>
@@ -609,12 +654,10 @@ def build_map_poster(itin, map_ref, days_map, sd):
 def build_day_map_card(day, day_stops, sd, map_ref, trip):
     accent = DAY_COLORS[(day - 1) % len(DAY_COLORS)]
     date = day_date(sd, day)
-    headline = None
-    for x in day_stops:
-        if "机场" not in x["name"]:
-            headline = x
-            break
-    headline = headline or day_stops[0]
+    scenic = [x for x in day_stops
+              if not any(k in x["name"] for k in ("机场", "县城", "服务区", "车站", "酒店"))
+              and not x["name"].endswith("市")]
+    headline = scenic[-1] if scenic else (day_stops[-1] if day_stops else day_stops[0])
     region = headline.get("region", "")
     theme = ((trip.get("theme") or "").replace("／", "/").split("/")[0]).strip()
 
@@ -862,7 +905,7 @@ def main():
     # ---- 地图版（B 整趟海报 / C 每日地图卡）：先渲染地图快照，再套分享图版式 ----
     shots = []
     if "map" in types:
-        shots.append({"name": "poster", "w": 1080, "h": 1100,
+        shots.append({"name": "poster", "w": 1080, "h": poster_map_height(stops),
                       "key_names": key_map_labels(stops)})
     if "mapday" in types:
         for d in sorted([x for x in days_map if x]):

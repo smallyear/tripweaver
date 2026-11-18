@@ -66,6 +66,25 @@ BASEMAPS = {
 }
 
 
+def route_aspect(stops):
+    """路线包围盒的宽高比（经度按中心纬度做等距修正），用于截图时决定地图高度。
+
+    宽路线（如运城→胶东）用矮横幅；南北向路线用高一点的画幅，避免地图大半是空白。
+    """
+    pts = [(float(s["lng"]), float(s["lat"])) for s in stops
+           if s.get("lat") is not None and s.get("lng") is not None]
+    if len(pts) < 2:
+        return 1.0
+    lngs = [p[0] for p in pts]
+    lats = [p[1] for p in pts]
+    lat_span = max(lats) - min(lats)
+    lng_span = max(lngs) - min(lngs)
+    if lat_span < 1e-6:
+        return 3.0
+    mid = (max(lats) + min(lats)) / 2 * pi / 180.0
+    return max(0.2, (lng_span * cos(mid)) / lat_span)
+
+
 def in_china(lng, lat):
     """粗略判断坐标是否在中国大陆范围内（决定是否施加 GCJ-02 偏移）。"""
     return 72.0 <= lng <= 137.9 and 0.83 <= lat <= 53.9
@@ -569,7 +588,7 @@ Object.keys(byDay).map(Number).sort(function(a,b){ return a-b; }).forEach(functi
 });
 
 // ---- 地图：底图按行程范围自动选择（国内高德 / 境外 OSM），可在 trip.basemap 覆盖 ----
-var map = L.map('map', { zoomControl: true });
+var map = L.map('map', { zoomControl: true, zoomSnap: 0.25, zoomDelta: 0.5 });
 var BASEMAPS = __BASEMAPS__;
 var routeLayer = L.layerGroup().addTo(map);
 var tileLayer = null;
@@ -975,7 +994,8 @@ def verify_and_render(html_path, png_path, itin, want_png, basemap_count=1):
             # 改为「地图置顶 + 行程双栏」（否则地图内容只占上面一半，下面大片空白）
             stack = sidebar_full > map_w * 1.15
             if stack:
-                map_h = int(max(1100, min(1500, map_w * 0.95)))
+                aspect = route_aspect(itin.get("stops", []))
+                map_h = int(max(560, min(1400, map_w / aspect)))
                 page.evaluate(
                     """(h) => {
                         document.body.classList.add('layout-stack');

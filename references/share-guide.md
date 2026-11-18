@@ -52,7 +52,7 @@ python3 bin/generate_share.py <itinerary.json> [--out <目录>] [--types all|day
 
 分享图本身不带底图，地图版另行生成，**生成前先问用户要不要**（见 SOP Phase 4.5）：
 
-- `--types map`：整趟一张 `map_poster.png`。地图标签自动精简——每天挑 1 个代表点（跳过机场/县城/「XX市」），总量封顶 5 个；其余标签隐藏，避免 1080 宽下糊成一团。
+- `--types map`：整趟一张 `map_poster.png`。地图标签自动精简——用「最远点采样」挑最多 5 个地理位置铺开的站（跳过机场/县城/超长名），其余隐藏，避免标签全挤在一处；地图高度按路线长宽比自适应（1080×520–1100），宽路线用矮横幅。
 - `--types mapday`：每天一张 `map_day_XX.png`。**不做标签精简**；地图只显示当天的站点与路段（`window.__filterDay__` 按天过滤 marker 与折线），单站天自动用 zoom 12。
 - `all` 含 `map`、不含 `mapday`：每日卡更耗时（每天多一次地图渲染，7 天约多 1–2 分钟），必须由用户决定。
 - **不消耗 ImageGen 积分**：地图是复用 `generate_travel.py` 的 Leaflet 页面做元素截图，不是 AI 生图；但**需要网络**拉瓦片，离线时会提示并跳过地图版，不影响其他分享图。
