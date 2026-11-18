@@ -11,7 +11,7 @@
 ## 命令
 
 ```bash
-python3 bin/generate_share.py <itinerary.json> [--out <目录>] [--types all|day,cover,grid,quote]
+python3 bin/generate_share.py <itinerary.json> [--out <目录>] [--types all|day,cover,grid,quote,map,mapday]
 ```
 
 - `--out` 省略时为 `<itinerary 同目录>/share`；指到任意目录也能正常加载插画（脚本按相对路径引用）。
@@ -28,6 +28,8 @@ python3 bin/generate_share.py <itinerary.json> [--out <目录>] [--types all|day
 | `cover_hero.png` | 1600×1000 | 封面，标题 + 日期区间 + 人数，发群/朋友圈首图 |
 | `grid.png` | 1200×1200 | 全部可用插画拼一张速览，列数按数量自适应（1/2/3） |
 | `quote_XX.png` | 1080×1350 | 金句卡 ×3，收尾或九宫格补位 |
+| `map_poster.png` | 1080×1920+ | **整趟地图海报**：方形地图 + 每日一行摘要，行程总览首图 |
+| `map_day_XX.png` | 1080×1350 | **每日地图卡**：当日路线 + 站点时间 + 备注，只显示当天站点/路段 |
 
 每日海报的「头条站」选取顺序：**当天第一张有插画的站** → 第一个非机场站 → 第一站。所以「每日头牌有插画」直接决定海报质量。
 
@@ -45,6 +47,17 @@ python3 bin/generate_share.py <itinerary.json> [--out <目录>] [--types all|day
 - 只画「每日头牌」：一天一张，7 天行程封顶 7 张 + 1 张封面。机场、县城、酒店、服务区、途经点不画。
 - 提示词必须包含 `no text / 无文字`；所有中文由页面排版叠加（AI 写中文不可靠）。
 - 用户拒绝或积分不足 → 仍出纯排版版分享图，不要因此跳过 Phase 4.5。
+
+## 地图版（map / mapday）
+
+分享图本身不带底图，地图版另行生成，**生成前先问用户要不要**（见 SOP Phase 4.5）：
+
+- `--types map`：整趟一张 `map_poster.png`。地图标签自动精简——每天挑 1 个代表点（跳过机场/县城/「XX市」），总量封顶 5 个；其余标签隐藏，避免 1080 宽下糊成一团。
+- `--types mapday`：每天一张 `map_day_XX.png`。**不做标签精简**；地图只显示当天的站点与路段（`window.__filterDay__` 按天过滤 marker 与折线），单站天自动用 zoom 12。
+- `all` 含 `map`、不含 `mapday`：每日卡更耗时（每天多一次地图渲染，7 天约多 1–2 分钟），必须由用户决定。
+- **不消耗 ImageGen 积分**：地图是复用 `generate_travel.py` 的 Leaflet 页面做元素截图，不是 AI 生图；但**需要网络**拉瓦片，离线时会提示并跳过地图版，不影响其他分享图。
+- 坐标缺失时会先按「缓存 → Photon → Nominatim」补齐（与主流程一致），所以 `itinerary.json` 只写站名也能出图；补齐后仍无坐标则跳过并提示先跑 `generate_travel.py`。
+- 中间产物：`_map_source.html`、`_map_*.png`（poster/day 卡引用），交付时不当作成品展示。
 
 ## 视觉风格
 
@@ -66,4 +79,4 @@ python3 bin/generate_share.py <itinerary.json> [--out <目录>] [--types all|day
 1. 打开 `share/day_01.png`：插画风格是否与行程调性相符、没有奇怪的 AI 文字。
 2. 超长站名是否已自动缩字号（脚本会拦溢出，但两行折行仍可能不美观）。
 3. `cover_hero.png` 的标题与日期区间是否正确（标题由 `trip.title` 直接渲染，不会自动改写）。
-4. 交付时给出分发建议：封面发群/朋友圈，`day_XX` 发给当天同行的人，`quote_XX` 做收尾或九宫格。
+4. 交付时给出分发建议：`map_poster` 做行程总览首图，封面发群/朋友圈，`day_XX`/`map_day_XX` 发给当天同行的人，`quote_XX` 做收尾或九宫格。

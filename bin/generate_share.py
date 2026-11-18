@@ -21,8 +21,11 @@ import argparse
 import datetime as dt
 import html
 import json
+import math
 import os
+import re
 import sys
+import time
 import urllib.parse
 from pathlib import Path
 
@@ -101,6 +104,150 @@ def cover_path(illu_dir):
     if illu_dir and (illu_dir / "cover.png").exists():
         return _img_ref(illu_dir / "cover.png")
     return None
+
+
+# ---------------------------------------------------------------------------
+# 地图快照：复用 generate_travel.py 的 Leaflet 页面截图（不依赖 ImageGen 积分）
+# ---------------------------------------------------------------------------
+def _load_map_module():
+    """按文件路径加载 generate_travel.py（同目录脚本，避免包名冲突）。"""
+    import importlib.util
+    path = Path(__file__).resolve().parent / "generate_travel.py"
+    spec = importlib.util.spec_from_file_location("tripweaver_travel", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _prepare_map_itin(mod, itin):
+    """地图快照前补齐坐标，并给国内站点补一份 GCJ-02（高德底图用）。
+
+    坐标来源与 generate_travel 主流程一致：本地缓存 → Photon → Nominatim。
+    这样即使 itinerary.json 只写了站名，地图海报也能独立生成。
+    """
+    ctx = itin.get("trip", {}).get("destination", "")
+    cache = mod.load_coord_cache()
+    for s in itin.get("stops", []):
+        if not s.get("name"):
+            continue
+        if s.get("lat") is None or s.get("lng") is None:
+            hit = mod.cache_lookup(cache, s["name"])
+            if hit:
+                s["lat"], s["lng"] = float(hit["lat"]), float(hit["lng"])
+            else:
+                lat, lng, meta = mod.geocode(s["name"], s.get("region") or ctx)
+                if lat is not None:
+                    s["lat"], s["lng"] = lat, lng
+                    if (meta or {}).get("via") == "nominatim":
+                        time.sleep(1.1)
+        if s.get("lat") is None or s.get("lng") is None:
+            continue
+        glng, glat = mod.wgs84_to_gcj02(float(s["lng"]), float(s["lat"]))
+        if (glng, glat) != (float(s["lng"]), float(s["lat"])):
+            s["lng_gcj"], s["lat_gcj"] = glng, glat
+
+
+def key_map_labels(stops, max_n=5):
+    """整趟海报用：每天挑一个有代表性的景点名，总量封顶（避免 1080 宽下标签糊成一团）。"""
+    skip = ("机场", "县城", "服务区", "车站", "酒店")
+    picked, seen = [], set()
+    for s in stops:
+        name = s.get("name") or ""
+        if not name or name.endswith("市") or any(k in name for k in skip):
+            continue
+        if s.get("day") in seen:
+            continue
+        seen.add(s.get("day"))
+        picked.append(name)
+    if len(picked) > max_n:
+        step = len(picked) / max_n
+        picked = [picked[int(i * step)] for i in range(max_n)]
+    return picked
+
+
+def render_map_shots(itin, shots, out_dir):
+    """按 shots 渲染多张地图快照。shots: [{name, w, h, days, key_names}]
+
+    返回 (refs|{name: 相对路径}, engine|None, error|str)
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return {}, None, "未安装 playwright，无法生成地图快照"
+    try:
+        mod = _load_map_module()
+    except Exception as e:  # noqa: BLE001
+        return {}, None, f"无法复用地图渲染模块：{e}"
+
+    _prepare_map_itin(mod, itin)
+    if not any(s.get("lat") is not None and s.get("lng") is not None for s in itin.get("stops", [])):
+        return {}, None, "行程没有可用坐标（先运行 generate_travel.py 完成地理编码）"
+    html = mod.build_html(itin, mod.plan_basemaps(itin))
+    tmp = out_dir / "_map_source.html"
+    tmp.write_text(html, encoding="utf-8")
+
+    refs = {}
+    try:
+        with sync_playwright() as p:
+            browser, label = launch_browser(p)
+            page = browser.new_page(viewport={"width": 1600, "height": 1000},
+                                    device_scale_factor=SCALE)
+            page.goto("file://" + str(tmp))
+            try:
+                page.wait_for_load_state("networkidle", timeout=8000)
+            except Exception:  # noqa: BLE001
+                pass
+            page.wait_for_timeout(1200)
+            for shot in shots:
+                page.set_viewport_size({"width": shot["w"], "height": shot["h"]})
+                page.evaluate(
+                    """(a) => {
+                        var sb = document.querySelector('.sidebar'); if (sb) sb.style.display = 'none';
+                        document.querySelectorAll('.leaflet-control-zoom').forEach(function(e){ e.style.display = 'none'; });
+                        var w = document.querySelector('.wrap');
+                        w.style.display = 'block'; w.style.height = a.h + 'px';
+                        var el = document.getElementById('map');
+                        el.style.width = a.w + 'px'; el.style.height = a.h + 'px';
+                        var m = window.__MAP__;
+                        m.invalidateSize();
+                        document.querySelectorAll('.leaflet-tooltip.mlabel').forEach(function(x){ x.style.display = ''; });
+                        if (window.__filterDay__) window.__filterDay__(a.days || null);
+                        var pts = a.days
+                            ? stops.filter(function(s){ return a.days.indexOf(s.day) >= 0 && s.lat != null; }).map(coordOf)
+                            : window.__PTS__;
+                        if (!pts || !pts.length) pts = window.__PTS__;
+                        if (!pts || !pts.length) return 'no-points';
+                        if (pts.length === 1) {
+                            m.setView(pts[0], a.singleZoom || 12);
+                        } else {
+                            m.fitBounds(pts, {padding: [Math.round(a.w * 0.04), Math.round(a.h * 0.05)]});
+                        }
+                        return 'ok';
+                    }""",
+                    {"w": shot["w"], "h": shot["h"], "days": shot.get("days")},
+                )
+                page.wait_for_timeout(1100)
+                tiles = page.evaluate("() => document.querySelectorAll('#map img.leaflet-tile-loaded').length")
+                if not tiles:
+                    raise RuntimeError("底图瓦片未加载（无网络或底图源不可达）")
+                if shot.get("key_names"):
+                    page.evaluate(
+                        """(keep) => {
+                            document.querySelectorAll('.leaflet-tooltip.mlabel').forEach(function(el){
+                                if (keep.indexOf(el.textContent) < 0) el.style.display = 'none';
+                            });
+                        }""",
+                        shot["key_names"],
+                    )
+                page.evaluate("() => { if (window.__declutter__) window.__declutter__(); }")
+                page.wait_for_timeout(200)
+                png = out_dir / ("_map_" + shot["name"] + ".png")
+                page.locator("#map").screenshot(path=str(png))
+                refs[shot["name"]] = _img_ref(png)
+            browser.close()
+        return refs, label, ""
+    except Exception as e:  # noqa: BLE001
+        return {}, None, f"地图快照渲染失败：{e}"
 
 
 # ---------------------------------------------------------------------------
@@ -312,14 +459,24 @@ def build_grid(itin, stops, illu_dir):
     trip = itin.get("trip") or {}
     title = trip.get("title", "目的地速览")
     items = []
+    seen = set()
     for s in stops:
         name = s["name"]
+        if name in seen:  # 同一站跨天重复出现（如告庄西双景）只入一格
+            continue
+        seen.add(name)
         p = illu_path(illu_dir, name)
         if p:
             items.append((p, name))
     n = len(items)
     # 列数：3 张铺满一行，4 张排 2×2；5 张以上回 3 列
     cols = 1 if n <= 1 else (2 if n in (2, 4) else 3)
+    rows = max(1, (n + cols - 1) // cols)
+    # 1200 方版里 cells 可用高度约 880px；按行数反推单格边长，
+    # 否则插画变多变 3 行时图注会被挤出画布（曾溢出 240px）。
+    gap, cap_h = 30, 78
+    cell = min(320, max(150, int((880 - gap * (rows - 1)) / rows) - 14 - cap_h))
+    cap_fs = 26 if cell >= 280 else 22
     # 标题过长时拆出尾部的「（日期）」，避免在括号中间断行
     main_title, tail_title = title, ""
     for l, r in (("（", "）"), ("(", ")")):
@@ -332,7 +489,7 @@ def build_grid(itin, stops, illu_dir):
     for p, name in items:
         cells += f"""
           <div class="cell">
-            {render_img(p, w=320, h=320)}
+            {render_img(p, w=cell, h=cell)}
             <div class="cap hand">{esc(name)}</div>
           </div>"""
     if not cells:
@@ -345,10 +502,12 @@ def build_grid(itin, stops, illu_dir):
     .sub{text-align:center;font-size:28px;color:#8a7558;margin-bottom:34px;}
     .cells{display:grid;grid-template-columns:repeat(__COLS__,1fr);gap:30px;justify-items:center;align-content:center;flex:1;}
     .cell{display:flex;flex-direction:column;align-items:center;}
-    .cell img,.cell .ph{width:320px;height:320px;border-radius:14px;}
-    .cap{margin-top:14px;font-size:26px;color:#5a4f40;text-align:center;max-width:340px;}
+    .cell img,.cell .ph{width:__CELL__px;height:__CELL__px;border-radius:14px;}
+    .cap{margin-top:14px;font-size:__CAPFS__px;color:#5a4f40;text-align:center;max-width:__CAPW__px;line-height:1.3;}
     """
-    css = css.replace("__COLS__", str(cols)).replace("__TSIZE__", str(tsize))
+    css = (css.replace("__COLS__", str(cols)).replace("__TSIZE__", str(tsize))
+              .replace("__CELL__", str(cell)).replace("__CAPFS__", str(cap_fs))
+              .replace("__CAPW__", str(cell + 20)))
     body = f"""
       <div class="grid hand">
         <div class="head">{esc(main_title)}</div>
@@ -360,7 +519,146 @@ def build_grid(itin, stops, illu_dir):
 
 
 # ---------------------------------------------------------------------------
-# 形态 4：金句卡片（竖版 1080x1350）
+# 形态 4：整趟地图海报（1080x1920，带底图 + 每日摘要）
+# ---------------------------------------------------------------------------
+def build_map_poster(itin, map_ref, days_map, sd):
+    trip = itin.get("trip") or {}
+    raw_title = trip.get("title") or "旅行手账"
+    disp = re.sub(r"[（(][^）)]*[）)]\s*$", "", raw_title).strip() or raw_title
+    dest = (trip.get("destination") or "").strip()
+    days_n = trip.get("days") or len(days_map)
+    stops_n = len([x for x in itin.get("stops", []) if x.get("name")])
+    drange = ""
+    if sd and days_n:
+        end = sd + dt.timedelta(days=int(days_n) - 1)
+        drange = f"{sd.strftime('%Y.%m.%d')} – {end.strftime('%m.%d')}"
+    elif sd:
+        drange = sd.strftime("%Y.%m.%d")
+    travelers = trip.get("travelers") or ""
+    theme = ((trip.get("theme") or "").replace("／", "/").split("/")[0]).strip()
+    foot = "旅途手账" + (" · " + theme if theme else "")
+
+    days_sorted = sorted([d for d in days_map if d])
+    n = max(1, len(days_sorted))
+    cols = 2 if n <= 8 else 3
+    rows = (n + cols - 1) // cols
+    tsize = 58 if len(disp) <= 16 else (48 if len(disp) <= 24 else 40)
+    nsize = 27 if cols == 2 else 23
+    # 按每格摘要的折行数估高度：中文字宽按 1、其他按 0.55，宁可略松不要压页脚
+    per_line = 16 if cols == 2 else 12
+    row_heights = []
+    for d in days_sorted:
+        names = " · ".join(x["name"] for x in days_map[d])
+        width = sum(1 if ord(ch) > 127 else 0.55 for ch in names)
+        lines = max(1, math.ceil(width / per_line))
+        row_heights.append(30 + lines * 39 + 8)
+    col_rows = [max(row_heights[i:i + cols]) for i in range(0, len(row_heights), cols)]
+    days_h = sum(col_rows) + 24 * max(0, rows - 1)
+    H = max(1920, 1460 + days_h + 120)
+
+    cells = ""
+    for d in days_sorted:
+        names = " · ".join(x["name"] for x in days_map[d])
+        accent = DAY_COLORS[(d - 1) % len(DAY_COLORS)]
+        cells += (f'<div class="day"><span class="dot" style="background:{accent}"></span>'
+                  f'<div><div class="dn">DAY {d}</div>'
+                  f'<div class="names">{esc(names)}</div></div></div>')
+
+    css = """
+    .head{position:absolute;left:56px;right:56px;top:34px;height:260px}
+    .kicker{font-size:24px;letter-spacing:8px;color:#8a7558}
+    .title{font-size:__TSIZE__px;line-height:1.18;margin-top:10px}
+    .meta{font-size:26px;color:#8a7558;margin-top:12px}
+    .stamp{position:absolute;right:56px;top:62px;width:150px;text-align:center;
+      border:2px dashed #c9b48c;border-radius:12px;padding:12px 0;transform:rotate(4deg);color:#8a7558}
+    .stamp b{display:block;font-size:34px;color:#a2693a;font-weight:400}
+    .stamp span{font-size:20px}
+    .mapbox{position:absolute;left:0;top:300px;width:100%;height:1100px;overflow:hidden}
+    .mapbox img{width:100%;height:100%;object-fit:cover;display:block}
+    .mapveil{position:absolute;inset:0;
+      background:linear-gradient(180deg,rgba(247,239,224,0) 74%,rgba(247,239,224,.95) 100%)}
+    .rule{position:absolute;left:56px;right:56px;top:1432px;height:3px;background:#c98a4b;opacity:.45;border-radius:3px}
+    .days{position:absolute;left:52px;right:52px;top:1460px;bottom:100px;display:grid;
+      grid-template-columns:repeat(__COLS__,1fr);column-gap:34px;row-gap:24px;
+      align-content:center}
+    .day{display:flex;gap:14px;align-items:flex-start;break-inside:avoid}
+    .dot{width:15px;height:15px;border-radius:50%;margin-top:10px;flex:0 0 auto}
+    .dn{font-size:23px;color:#8a7558;letter-spacing:1px}
+    .names{font-size:__NSIZE__px;line-height:1.4}
+    .foot{position:absolute;bottom:40px;left:0;right:0;text-align:center;font-size:24px;color:#b3a081}
+    """
+    css = (css.replace("__TSIZE__", str(tsize)).replace("__COLS__", str(cols))
+              .replace("__NSIZE__", str(nsize)))
+    body = f"""
+      <div class="head">
+        <div class="kicker">旅 途 手 账</div>
+        <div class="title">{esc(disp)}</div>
+        <div class="meta">{esc(" · ".join(x for x in [drange, dest, travelers] if x))}</div>
+      </div>
+      <div class="stamp"><b>{days_n}</b><span>天 · {stops_n} 站</span></div>
+      <div class="mapbox"><img src="{esc(map_ref)}"/><div class="mapveil"></div></div>
+      <div class="rule"></div>
+      <div class="days">{cells}</div>
+      <div class="foot">{esc(foot)}</div>"""
+    return page_wrap(css, body), (1080, H)
+
+
+# ---------------------------------------------------------------------------
+# 形态 5：每日地图卡（1080x1350，当日路线 + 站点时间）
+# ---------------------------------------------------------------------------
+def build_day_map_card(day, day_stops, sd, map_ref, trip):
+    accent = DAY_COLORS[(day - 1) % len(DAY_COLORS)]
+    date = day_date(sd, day)
+    headline = None
+    for x in day_stops:
+        if "机场" not in x["name"]:
+            headline = x
+            break
+    headline = headline or day_stops[0]
+    region = headline.get("region", "")
+    theme = ((trip.get("theme") or "").replace("／", "/").split("/")[0]).strip()
+
+    rows = ""
+    for x in day_stops[:6]:
+        note = f'<div class="note">{esc(x["note"])}</div>' if x.get("note") else ""
+        rows += (f'<div class="st"><span class="t">{esc(x.get("time") or "")}</span>'
+                 f'<span class="n">{esc(x["name"])}</span></div>{note}')
+    nsize = 46 if len(headline["name"]) <= 12 else (38 if len(headline["name"]) <= 18 else 32)
+
+    css = """
+    .hd{position:absolute;left:56px;right:56px;top:40px;height:150px}
+    .badge{display:inline-block;background:__ACC__;color:#fff;border-radius:26px;
+      padding:8px 24px;font-size:28px;letter-spacing:2px}
+    .date{display:inline-block;margin-left:16px;font-size:26px;color:#8a7558}
+    .headline{font-size:__NSIZE__px;line-height:1.2;margin-top:14px}
+    .region{font-size:24px;color:#8a7558;margin-top:6px}
+    .mapbox{position:absolute;left:0;top:236px;width:100%;height:780px;overflow:hidden}
+    .mapbox img{width:100%;height:100%;object-fit:cover;display:block}
+    .mapveil{position:absolute;inset:0;
+      background:linear-gradient(180deg,rgba(247,239,224,0) 82%,rgba(247,239,224,.95) 100%)}
+    .list{position:absolute;left:60px;right:60px;top:1046px;bottom:110px;
+      display:flex;flex-direction:column;justify-content:center}
+    .st{font-size:28px;margin-bottom:12px}
+    .st .t{color:__ACC__;margin-right:14px;font-variant-numeric:tabular-nums}
+    .st .n{color:#4a4036}
+    .note{font-size:21px;color:#9a8360;margin:-6px 0 12px 74px;line-height:1.4}
+    .foot{position:absolute;bottom:34px;left:0;right:0;text-align:center;font-size:22px;color:#b3a081}
+    """
+    css = css.replace("__ACC__", accent).replace("__NSIZE__", str(nsize))
+    body = f"""
+      <div class="hd">
+        <div><span class="badge">DAY {day}</span><span class="date">{esc(date)}</span></div>
+        <div class="headline">{esc(headline["name"])}</div>
+        <div class="region">{esc(region)}</div>
+      </div>
+      <div class="mapbox"><img src="{esc(map_ref)}"/><div class="mapveil"></div></div>
+      <div class="list">{rows}</div>
+      <div class="foot">{esc("旅途手账" + (" · " + theme if theme else ""))}</div>"""
+    return page_wrap(css, body), (1080, 1350)
+
+
+# ---------------------------------------------------------------------------
+# 形态 6：金句卡片（竖版 1080x1350）
 # ---------------------------------------------------------------------------
 def build_quote(itin, idx, illu_dir):
     trip = itin.get("trip") or {}
@@ -429,7 +727,8 @@ CHECK_JS = """() => {
   const tol = 2;
   const over = [];
   const sel = '.title,.stamp-dest,.stamp-sub,.quote,.head,.cap,.kw,.sub,.meta,'
-            + '.date,.foot,.badge,.kicker,.mark,.sign';
+            + '.date,.foot,.badge,.kicker,.mark,.sign,.headline,.region,'
+            + '.dn,.names,.st,.list,.mapbox';
   document.querySelectorAll(sel).forEach(el => {
     const r = el.getBoundingClientRect();
     if (r.bottom > fr.bottom + tol) {
@@ -440,11 +739,12 @@ CHECK_JS = """() => {
     }
   });
   const foot = document.querySelector('.foot');
-  const kws = document.querySelector('.kws');
   let footOverlap = false;
-  if (foot && kws) {
-    const a = foot.getBoundingClientRect(), b = kws.getBoundingClientRect();
-    footOverlap = b.bottom > a.top + 1;
+  if (foot) {
+    const fa = foot.getBoundingClientRect();
+    document.querySelectorAll('.kws,.days,.list,.cells').forEach(el => {
+      if (el.getBoundingClientRect().bottom > fa.top + 1) footOverlap = true;
+    });
   }
   const broken = Array.from(document.images)
     .filter(i => i.complete && i.naturalWidth === 0)
@@ -501,7 +801,7 @@ def main():
     ap.add_argument("itinerary", help="itinerary.json 路径")
     ap.add_argument("--out", help="输出目录（默认 <itinerary 同目录>/share）")
     ap.add_argument("--types", default="all",
-                    help="all|day,cover,grid,quote（逗号分隔）")
+                    help="all|day,cover,grid,quote,map,mapday（逗号分隔；all 含 map，不含 mapday）")
     ap.add_argument("--skip-verify", action="store_true", help="跳过渲染后自检")
     args = ap.parse_args()
 
@@ -522,11 +822,13 @@ def main():
         days_map.setdefault(s.get("day", 0), []).append(s)
 
     types = [t.strip() for t in args.types.split(",") if t.strip()]
-    unknown = [t for t in types if t not in ("all", "day", "cover", "grid", "quote")]
+    allowed = ("all", "day", "cover", "grid", "quote", "map", "mapday")
+    unknown = [t for t in types if t not in allowed]
     if unknown:
-        ap.error(f"未知的 --types: {', '.join(unknown)}（可选 all|day|cover|grid|quote）")
+        ap.error(f"未知的 --types: {', '.join(unknown)}（可选 {'|'.join(allowed)}）")
     if "all" in types:
-        types = ["day", "cover", "grid", "quote"]
+        # all 默认带一张整趟地图海报；每日地图卡更耗时，需显式指定 mapday
+        types = ["day", "cover", "grid", "map", "quote"]
 
     jobs = []
 
@@ -556,6 +858,34 @@ def main():
         for i in range(3):
             html, size = build_quote(itin, i, illu_dir)
             do(html, size, f"quote_{i + 1:02d}")
+
+    # ---- 地图版（B 整趟海报 / C 每日地图卡）：先渲染地图快照，再套分享图版式 ----
+    shots = []
+    if "map" in types:
+        shots.append({"name": "poster", "w": 1080, "h": 1100,
+                      "key_names": key_map_labels(stops)})
+    if "mapday" in types:
+        for d in sorted([x for x in days_map if x]):
+            shots.append({"name": f"day{d:02d}", "w": 1080, "h": 780, "days": [d]})
+
+    refs, map_engine, map_err = ({}, None, "")
+    if shots:
+        refs, map_engine, map_err = render_map_shots(itin, shots, out_dir)
+    if map_engine:
+        print(f"ℹ️ 地图快照引擎: {map_engine}")
+    if map_err:
+        print(f"⚠️ 地图快照失败，跳过地图版：{map_err}")
+
+    if "map" in types and refs.get("poster"):
+        html, size = build_map_poster(itin, refs["poster"], days_map, sd)
+        do(html, size, "map_poster")
+    if "mapday" in types:
+        for d in sorted([x for x in days_map if x]):
+            ref = refs.get(f"day{d:02d}")
+            if not ref:
+                continue
+            html, size = build_day_map_card(d, days_map[d], sd, ref, itin.get("trip") or {})
+            do(html, size, f"map_day_{d:02d}")
 
     engine, results, render_err = render_batch(jobs)
 

@@ -18,6 +18,8 @@
 > 确认后一次交付四样东西：可缩放的交互地图（左侧文字行程 + 右侧路线）、适合转发的路线长图、按目的地和季节定制的出行前清单、以及出发前可再查一次的实时天气。
 >
 > 还会配一套**不带底图的手绘分享图**：每日海报、封面、景点速览、金句卡，手机尺寸直出，发群或朋友圈都清晰。插画按「每天头牌景点」生成，用多少积分你说了算。
+>
+> 想要地图版也可以：整趟一张「方形地图 + 每日摘要」的海报，或每天一张「当日路线 + 站点时间」的地图卡——本机渲染、不消耗生图积分，要不要由你决定。
 
 **English**
 > Plan the trip with a planner who checks feasibility first: route order, first-night gateway, and realistic daily driving time — then drafts day by day until you approve.
@@ -36,6 +38,8 @@
 | 4 | `04-grid.jpg` | 景点速览九宫格，适合做行程概览 |
 | 5 | `05-checklist.jpg` | 出行前清单：按「距出发还有几天」压缩的时间线 |
 | 6 | `06-weather.jpg` | 逐日天气卡：标注数据取站与温度区间 |
+| 7 | `07-map-poster.jpg` | 整趟地图海报：方形地图 + 每日一行摘要，手机全屏可直接发 |
+| 8 | `08-map-day.jpg` | 每日地图卡：当天路线 + 站点时间，只显示当天站点与路段 |
 
 ## 快速开始（quickPrompts 已内置）
 

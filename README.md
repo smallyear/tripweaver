@@ -39,16 +39,18 @@ python3 bin/generate_travel.py <itinerary.json> --out <输出目录>
   - **站点坐标核对表**：列出每个站点的解析坐标与来源（自动编码/手填），便于发现明显错位（如标到邻市）。
   - **❌ 阻断项**（退出码 1，须修复后重跑）：HTML 占位符残留 / 行程未渲染 / 站点数不符 / JS 错误 / PNG 左侧文字截断 / 行程超长。
   - **✅ 视觉核对项**：站点坐标与上一站距离、**景点常驻标签是否重叠**（脚本会自动微调标签位置避免压字，仍重叠时告警）。
+  - **版面自适应**：行程文字远高于地图宽度时，PNG 自动改为「地图置顶 + 行程双栏」（否则地图会被拉成竖长条、底部大片空白）；短行程仍保持左右分栏。
   - **⚠️ 降级项**（仅告警，不阻断）：底图瓦片未加载（无网络时地图空白，文字行程仍可交付）/ 标记缺失（坐标缺失，手填后重跑）/ 未装 playwright（无 PNG）。
   - **底图自动回退**：主底图瓦片加载不足时自动切换备用底图（国内 高德→OSM，境外 OSM→CARTO）并打印 ℹ️ 提示。可用 `--skip-verify` 关闭自检（不推荐）。
 
 ### 手绘分享图（无地图）
 
 ```bash
-python3 bin/generate_share.py <itinerary.json> --out <输出目录>/share [--types all|day,cover,grid,quote]
+python3 bin/generate_share.py <itinerary.json> --out <输出目录>/share [--types all|day,cover,grid,quote,map,mapday]
 ```
 
 - 产出 `day_XX.png` 每日海报（1080×1440）、`cover_hero.png`（1600×1000）、`grid.png`（1200×1200 速览）、`quote_01..03.png`（1080×1350 金句卡），`device_scale_factor=2` 出高清图。
+- **地图版**：`--types map` 出 `map_poster.png`（1080×1920+，方形地图 + 每日一行摘要，标签自动精简）；`--types mapday` 每天出一张 `map_day_XX.png`（1080×1350，当日路线 + 站点时间，只显示当天站点与路段，标签全量）。`all` 含 `map`、不含 `mapday`——每日地图卡更耗时，由用户决定是否要。地图版复用 `generate_travel` 的 Leaflet 页面截图，**不消耗 ImageGen 积分**，但需要网络拉瓦片。
 - 不依赖地图底图，手写体走 macOS 系统字体栈（`HanziPen`/`Hannotate`/楷体），**不依赖外部 CDN**；渲染复用系统 Chrome。
 - 插画放 `<行程目录>/illustrations/`，**磁盘文件名用中文真名**（`<站名>.png`，封面 `cover.png`）；HTML 里用 `encodeURIComponent` 引用。**不要把文件名写成 `%E9…` 百分号编码**——`file://` 会双重解码导致 404。
 - 插画缺失不阻断：自动降级成「纸卡 + 站名」。插画由 ImageGen 生成、**消耗用户积分**，只画每日头牌（7 天封顶 7 张 + 封面），生成前先征得同意。
