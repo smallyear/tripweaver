@@ -14,7 +14,8 @@
 python3 bin/generate_share.py <itinerary.json> [--out <目录>] [--types all|day,cover,grid,quote]
 ```
 
-- `--out` 省略时为 `<itinerary 同目录>/share`。
+- `--out` 省略时为 `<itinerary 同目录>/share`；指到任意目录也能正常加载插画（脚本按相对路径引用）。
+- `--types` 只接受 `all|day|cover|grid|quote`，写错会直接报错退出，不会静默出 0 张。
 - 依赖 `itinerary.json` 与 `<itinerary 同目录>/illustrations/`。
 - 渲染复用系统 Chrome（与 `generate_travel.py` 同一链路），无需下载 chromium。
 - 以 `device_scale_factor=2` 出高清图。

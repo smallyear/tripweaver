@@ -1,6 +1,6 @@
 {
   "name": "tripweaver",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "AI travel planner that co-designs itineraries with users, then generates a zoomable map, a route image with a text itinerary, and hand-drawn shareable posters.",
   "author": {
     "name": "WorkBuddy",

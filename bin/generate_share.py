@@ -21,7 +21,9 @@ import argparse
 import datetime as dt
 import html
 import json
+import os
 import sys
+import urllib.parse
 from pathlib import Path
 
 # 手写体字体栈（macOS 系统可用，无需联网）
@@ -70,23 +72,34 @@ def day_date(sd, day):
     return (sd + dt.timedelta(days=day - 1)).strftime("%Y.%m.%d")
 
 
-def illu_path(illu_dir, name):
-    """返回相对于 HTML 文件的插画引用路径；不存在返回 None。
+# 由 main() 设置为本次 share 输出目录：插画用「相对 HTML 的路径」引用，
+# 因此 --out 指到行程目录之外也能正常加载（曾因写死 ../illustrations/ 导致 404）。
+_HTML_DIR = None
 
-    磁盘文件用中文真名（<站名>.png），HTML 里用 encodeURIComponent 引用，
-    浏览器加载 file:// 时会解码回中文，正好匹配磁盘文件。
+
+def _img_ref(p):
+    """把插画绝对路径转成 HTML 可用的相对引用（保留中文，做百分号编码）。"""
+    if _HTML_DIR:
+        rel = os.path.relpath(p, _HTML_DIR).replace(os.sep, "/")
+        return urllib.parse.quote(rel, safe="/.:")
+    return "../illustrations/" + urllib.parse.quote(p.name, safe="")
+
+
+def illu_path(illu_dir, name):
+    """返回插画引用路径；不存在返回 None。
+
+    磁盘文件用中文真名（<站名>.png）；file:// 加载时会解码百分号编码，
+    正好匹配磁盘中文文件名。（历史坑：磁盘文件别命名成 %E9… 编码）
     """
     if not illu_dir:
         return None
-    import urllib.parse
-    if (illu_dir / (name + ".png")).exists():
-        return "../illustrations/" + urllib.parse.quote(name, safe="") + ".png"
-    return None
+    p = illu_dir / (name + ".png")
+    return _img_ref(p) if p.exists() else None
 
 
 def cover_path(illu_dir):
     if illu_dir and (illu_dir / "cover.png").exists():
-        return "../illustrations/cover.png"
+        return _img_ref(illu_dir / "cover.png")
     return None
 
 
@@ -359,12 +372,11 @@ def build_quote(itin, idx, illu_dir):
     if cov:
         avail.append(cov)
     # 顺带收集站点插画
-    import urllib.parse
     if illu_dir:
         for p in sorted(illu_dir.glob("*.png")):
             if p.name == "cover.png":
                 continue
-            avail.append("../illustrations/" + p.name)
+            avail.append(_img_ref(p))
     src = avail[idx % len(avail)] if avail else None
 
     css = """
@@ -499,6 +511,8 @@ def main():
     illu_dir = trip_dir / "illustrations"
     out_dir = Path(args.out).resolve() if args.out else (trip_dir / "share")
     out_dir.mkdir(parents=True, exist_ok=True)
+    global _HTML_DIR
+    _HTML_DIR = out_dir  # 插画按相对本目录引用，--out 指到别处也能加载
 
     sd = start_date(itin)
     stops = itin.get("stops", [])
@@ -508,6 +522,9 @@ def main():
         days_map.setdefault(s.get("day", 0), []).append(s)
 
     types = [t.strip() for t in args.types.split(",") if t.strip()]
+    unknown = [t for t in types if t not in ("all", "day", "cover", "grid", "quote")]
+    if unknown:
+        ap.error(f"未知的 --types: {', '.join(unknown)}（可选 all|day|cover|grid|quote）")
     if "all" in types:
         types = ["day", "cover", "grid", "quote"]
 
