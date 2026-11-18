@@ -205,7 +205,7 @@ def build_daily_poster(day, day_stops, sd, illu_dir, trip=None):
         poster_cls = "poster noimg"
 
     css = """
-    .poster{position:relative;width:1080px;height:1440px;padding:64px 60px;}
+    .poster{position:relative;width:100%;height:100%;padding:64px 60px;}
     .badge{display:inline-block;background:__ACC__;color:#fff;border-radius:30px;
       padding:10px 26px;font-size:30px;letter-spacing:2px;box-shadow:0 3px 8px rgba(0,0,0,.12);}
     .date{margin-top:18px;font-size:30px;color:#8a7558;}
@@ -266,7 +266,7 @@ def build_cover(itin, illu_dir):
     cov = cover_path(illu_dir)
 
     css = """
-    .hero{position:relative;width:1600px;height:1000px;}
+    .hero{position:relative;width:100%;height:100%;}
     .bg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}
     .bgph{position:absolute;inset:0;background:linear-gradient(135deg,#e8d9bd,#cdb891);}
     .veil{position:absolute;inset:0;
@@ -305,8 +305,16 @@ def build_grid(itin, stops, illu_dir):
         if p:
             items.append((p, name))
     n = len(items)
-    # 列数：1→1,2→2,3→3,≥4→3（保持方感）
-    cols = 1 if n <= 1 else (2 if n == 2 else 3)
+    # 列数：3 张铺满一行，4 张排 2×2；5 张以上回 3 列
+    cols = 1 if n <= 1 else (2 if n in (2, 4) else 3)
+    # 标题过长时拆出尾部的「（日期）」，避免在括号中间断行
+    main_title, tail_title = title, ""
+    for l, r in (("（", "）"), ("(", ")")):
+        if title.endswith(r) and l in title:
+            idx = title.rfind(l)
+            main_title, tail_title = title[:idx], title[idx:]
+            break
+    tsize = 56 if len(main_title) <= 12 else (48 if len(main_title) <= 17 else 40)
     cells = ""
     for p, name in items:
         cells += f"""
@@ -318,18 +326,20 @@ def build_grid(itin, stops, illu_dir):
         cells = '<div class="cap hand" style="font-size:40px;color:#a08b66;">（暂无插画，先给站点生成插画）</div>'
 
     css = """
-    .grid{position:relative;width:1200px;height:1200px;padding:70px 60px;display:flex;flex-direction:column;}
-    .head{text-align:center;font-size:56px;color:#3f362b;margin-bottom:8px;}
+    .grid{position:relative;width:100%;height:100%;padding:70px 60px;display:flex;flex-direction:column;}
+    .head{text-align:center;font-size:__TSIZE__px;color:#3f362b;margin-bottom:8px;line-height:1.25;}
+    .headsub{text-align:center;font-size:30px;color:#8a7558;margin-bottom:10px;}
     .sub{text-align:center;font-size:28px;color:#8a7558;margin-bottom:34px;}
     .cells{display:grid;grid-template-columns:repeat(__COLS__,1fr);gap:30px;justify-items:center;align-content:center;flex:1;}
     .cell{display:flex;flex-direction:column;align-items:center;}
     .cell img,.cell .ph{width:320px;height:320px;border-radius:14px;}
     .cap{margin-top:14px;font-size:26px;color:#5a4f40;text-align:center;max-width:340px;}
     """
-    css = css.replace("__COLS__", str(cols))
+    css = css.replace("__COLS__", str(cols)).replace("__TSIZE__", str(tsize))
     body = f"""
       <div class="grid hand">
-        <div class="head">{esc(title)}</div>
+        <div class="head">{esc(main_title)}</div>
+        {f'<div class="headsub">{esc(tail_title)}</div>' if tail_title else ''}
         <div class="sub">目的地速览</div>
         <div class="cells">{cells}</div>
       </div>"""
@@ -358,7 +368,7 @@ def build_quote(itin, idx, illu_dir):
     src = avail[idx % len(avail)] if avail else None
 
     css = """
-    .qc{position:relative;width:1080px;height:1350px;}
+    .qc{position:relative;width:100%;height:100%;}
     .top{position:relative;width:100%;height:760px;}
     .top img,.top .ph{width:100%;height:760px;}
     .tape.q{top:24px;left:50%;margin-left:-60px;transform:rotate(-3deg);}
@@ -399,23 +409,76 @@ def launch_browser(playwright):
     raise RuntimeError(f"无法启动浏览器：{last}")
 
 
-def render(html_path, png_path, w, h):
+# 渲染后自检：文字溢出画布 / 页脚压住站点列表 / 图片加载失败 / 插画占位
+CHECK_JS = """() => {
+  const frame = document.querySelector('.frame');
+  if (!frame) return { fatal: '缺少 .frame 容器' };
+  const fr = frame.getBoundingClientRect();
+  const tol = 2;
+  const over = [];
+  const sel = '.title,.stamp-dest,.stamp-sub,.quote,.head,.cap,.kw,.sub,.meta,'
+            + '.date,.foot,.badge,.kicker,.mark,.sign';
+  document.querySelectorAll(sel).forEach(el => {
+    const r = el.getBoundingClientRect();
+    if (r.bottom > fr.bottom + tol) {
+      over.push((el.className || el.tagName) + ' 下溢出 ' + Math.round(r.bottom - fr.bottom) + 'px');
+    }
+    if (r.right > fr.right + tol) {
+      over.push((el.className || el.tagName) + ' 右溢出 ' + Math.round(r.right - fr.right) + 'px');
+    }
+  });
+  const foot = document.querySelector('.foot');
+  const kws = document.querySelector('.kws');
+  let footOverlap = false;
+  if (foot && kws) {
+    const a = foot.getBoundingClientRect(), b = kws.getBoundingClientRect();
+    footOverlap = b.bottom > a.top + 1;
+  }
+  const broken = Array.from(document.images)
+    .filter(i => i.complete && i.naturalWidth === 0)
+    .map(i => decodeURIComponent((i.getAttribute('src') || '').split('/').pop()));
+  return {
+    overflow: over,
+    footOverlap: footOverlap,
+    broken: broken,
+    placeholders: document.querySelectorAll('.ph').length,
+    images: document.images.length
+  };
+}"""
+
+
+def render_batch(jobs):
+    """一次浏览器会话渲染全部页面，同时采集自检数据。
+
+    jobs: [{name, html, png, w, h}]
+    返回 (engine|None, results|{name: dict}, error|str)
+    """
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
-        return False, "未安装 playwright，跳过 PNG（HTML 已生成）"
+        return None, {}, "未安装 playwright，跳过 PNG（HTML 已生成，可手动打开）"
     try:
         with sync_playwright() as p:
-            browser, _ = launch_browser(p)
-            page = browser.new_page(viewport={"width": w, "height": h},
-                                    device_scale_factor=SCALE)
-            page.goto("file://" + str(html_path))
-            page.wait_for_timeout(400)
-            page.screenshot(path=str(png_path))
+            browser, label = launch_browser(p)
+            results = {}
+            for job in jobs:
+                page = browser.new_page(
+                    viewport={"width": job["w"], "height": job["h"]},
+                    device_scale_factor=SCALE,
+                )
+                try:
+                    page.goto("file://" + str(job["html"]))
+                    page.wait_for_timeout(400)
+                    page.screenshot(path=str(job["png"]))
+                    results[job["name"]] = page.evaluate(CHECK_JS)
+                except Exception as e:  # noqa: BLE001
+                    results[job["name"]] = {"fatal": str(e)}
+                finally:
+                    page.close()
             browser.close()
-        return True, ""
+            return label, results, ""
     except Exception as e:  # noqa: BLE001
-        return False, str(e)
+        return None, {}, str(e)
 
 
 # ---------------------------------------------------------------------------
@@ -427,6 +490,7 @@ def main():
     ap.add_argument("--out", help="输出目录（默认 <itinerary 同目录>/share）")
     ap.add_argument("--types", default="all",
                     help="all|day,cover,grid,quote（逗号分隔）")
+    ap.add_argument("--skip-verify", action="store_true", help="跳过渲染后自检")
     args = ap.parse_args()
 
     itin_path = Path(args.itinerary).resolve()
@@ -447,18 +511,13 @@ def main():
     if "all" in types:
         types = ["day", "cover", "grid", "quote"]
 
-    produced = []
-    errors = []
+    jobs = []
 
     def do(html, size, name):
         hp = out_dir / (name + ".html")
-        pp = out_dir / (name + ".png")
         hp.write_text(html, encoding="utf-8")
-        ok, msg = render(hp, pp, *size)
-        if ok and pp.exists():
-            produced.append(str(pp))
-        else:
-            errors.append(f"{name}: {msg or 'PNG 未生成'}")
+        jobs.append({"name": name, "html": hp, "png": out_dir / (name + ".png"),
+                     "w": size[0], "h": size[1]})
 
     if "day" in types:
         max_day = max([d for d in days_map if d] or [0])
@@ -481,14 +540,62 @@ def main():
             html, size = build_quote(itin, i, illu_dir)
             do(html, size, f"quote_{i + 1:02d}")
 
+    engine, results, render_err = render_batch(jobs)
+
     print(f"\n✅ 无地图分享图已生成 → {out_dir}")
-    for f in produced:
-        print("   " + f)
-    if errors:
-        print("\n⚠️ 以下未成功：")
-        for e in errors:
-            print("   " + e)
-    return 0 if not errors else 1
+    for job in jobs:
+        mark = "✅" if job["png"].exists() else "⚠️"
+        print(f"   {mark} {job['png']}")
+
+    if engine is None:
+        print(f"\n⚠️ 跳过自检：{render_err}")
+        return 0
+    if args.skip_verify:
+        print(f"\n⚠️ 已跳过自检（--skip-verify），渲染引擎: {engine}")
+        return 0
+
+    print(f"\n--- 分享图自检（{engine}）---")
+    fails, warns = [], []
+    for job in jobs:
+        name = job["name"]
+        r = results.get(name)
+        if not r:
+            print(f"  ⚠️ {name}: 未取到自检数据")
+            warns.append(name)
+            continue
+        if r.get("fatal"):
+            print(f"  ❌ {name}: 渲染异常 {r['fatal']}")
+            fails.append(name)
+            continue
+        issues = []
+        if r.get("overflow"):
+            issues.append("文字溢出画布：" + "；".join(r["overflow"][:3]))
+        if r.get("footOverlap"):
+            issues.append("页脚压住了站点列表")
+        if r.get("broken"):
+            issues.append("图片加载失败：" + "、".join(r["broken"][:3]))
+        if issues:
+            print(f"  ❌ {name}: " + " / ".join(issues))
+            fails.append(name)
+            continue
+        notes = []
+        if r.get("placeholders"):
+            notes.append(f"插画缺失 {r['placeholders']} 张（已用占位纸卡）")
+        if name == "grid" and r.get("images", 0) < 2:
+            notes.append("可用插画不足 2 张，九宫格参考价值低")
+        if notes:
+            print(f"  ⚠️ {name}: " + " / ".join(notes))
+            warns.append(name)
+        else:
+            print(f"  ✅ {name}")
+
+    passed = len(jobs) - len(fails) - len(warns)
+    print(f"\n{'✅' if not fails else '❌'} 自检：{passed} 张通过，"
+          f"{len(warns)} 张告警，{len(fails)} 张失败")
+    if fails:
+        print("   请修复上方 ❌ 项后重跑，不要带着文字溢出/图片失败的图交付。")
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
