@@ -605,10 +605,52 @@ function draw(){
     }
   }
   window.__PTS__ = pts;
+  scheduleDeclutter();
 }
 function fitAll(){
   if (pts.length) map.fitBounds(pts, { padding: [40,40] }); else map.setView([35,105], 4);
 }
+
+// ---- 标签避让：常驻景点名重叠时按优先级微调偏移，不隐藏任何名字 ----
+// 站点密集（如景洪机场↔傣族园、野象谷↔大渡岗）时，右侧标签会互相压住；
+// 这里依次尝试「原位 → 上下/左右 → 左侧翻转」，选第一个不碰撞的位置。
+var __declutterTimer = null;
+function scheduleDeclutter(){ clearTimeout(__declutterTimer); __declutterTimer = setTimeout(declutterLabels, 60); }
+function declutterLabels(){
+  var mapEl = document.getElementById('map');
+  if (!mapEl) return;
+  var mr = mapEl.getBoundingClientRect();
+  var els = Array.prototype.slice.call(document.querySelectorAll('.leaflet-tooltip.mlabel'));
+  if (!els.length) return;
+  // 先清空上一轮的偏移，再按原始位置重新测量（DOM 顺序 = 站点顺序 = 优先级）
+  els.forEach(function(el){ el.style.marginLeft = ''; el.style.marginTop = ''; });
+  var placed = [];
+  els.forEach(function(el){
+    var b = el.getBoundingClientRect();
+    var w = b.width, h = b.height;
+    var offs = [[0,0],[0,-(h+4)],[0,h+4],[-(w+18),0],[0,-(h*2+8)],[0,h*2+8],[-(w+18),-(h+4)],[-(w+18),h+4]];
+    var pick = null;
+    for (var i=0;i<offs.length;i++){
+      var ox=offs[i][0], oy=offs[i][1];
+      var r={left:b.left+ox, right:b.right+ox, top:b.top+oy, bottom:b.bottom+oy};
+      // 不能超出地图可视区（用地图自身矩形，否则会被左侧栏遮住）
+      if (r.left < mr.left+2 || r.right > mr.right-2 || r.top < mr.top+2 || r.bottom > mr.bottom-2) continue;
+      var clash = false;
+      for (var j=0;j<placed.length;j++){
+        var p = placed[j];
+        if (!(r.right < p.left-1 || r.left > p.right+1 || r.bottom < p.top-1 || r.top > p.bottom+1)) { clash = true; break; }
+      }
+      if (!clash) { pick = {ox:ox, oy:oy, r:r}; break; }
+    }
+    if (!pick) pick = {ox:0, oy:0, r:b};  // 实在避不开就保持原位，名字不丢
+    if (pick.ox) el.style.marginLeft = pick.ox + 'px';
+    if (pick.oy) el.style.marginTop = pick.oy + 'px';
+    placed.push(pick.r);
+  });
+}
+map.on('moveend zoomend viewreset', scheduleDeclutter);
+window.addEventListener('resize', scheduleDeclutter);
+window.__declutter__ = declutterLabels;
 window.__setBasemap__ = function(i){ applyBasemap(i); draw(); fitAll(); };
 window.__basemapId__ = function(){ return BASEMAPS[basemapIndex].id; };
 // ---- 风格主题：定义与切换（去商务感，多风格可切换） ----
@@ -923,6 +965,9 @@ def verify_and_render(html_path, png_path, itin, want_png, basemap_count=1):
             # 收起气泡并留足地图动画稳定时间，避免弹窗/半途动画被拍进 PNG
             page.evaluate("() => { if (window.__MAP__) window.__MAP__.closePopup(); }")
             page.wait_for_timeout(1200)
+            # 布局变化后（拉高地图 + 重新 fitBounds）重跑一次标签避让，确保 PNG 里不压字
+            page.evaluate("() => { if (window.__declutter__) window.__declutter__(); }")
+            page.wait_for_timeout(120)
             page.screenshot(path=str(png_path), full_page=True)
 
             # 截断校验：侧边栏完整内容是否落在图片高度内（无内部滚动条 = 未裁切）
@@ -949,6 +994,27 @@ def verify_and_render(html_path, png_path, itin, want_png, basemap_count=1):
                 report.append(f"⚠️ 无法读取 PNG 尺寸({e})，跳过尺寸校验")
 
             report.append(f"✅ PNG 已生成: {png_path}")
+
+        # 标签避让检查：常驻景点名两两比对，重叠数应为 0（站点过密时可能仍有少量）
+        try:
+            lab = page.evaluate("""() => {
+                var els = Array.prototype.slice.call(document.querySelectorAll('.leaflet-tooltip.mlabel'));
+                var rs = els.map(function(e){ return e.getBoundingClientRect(); });
+                var n = 0;
+                for (var i=0;i<rs.length;i++) {
+                  for (var j=i+1;j<rs.length;j++) {
+                    var a=rs[i], b=rs[j];
+                    if (!(a.right<b.left-1 || a.left>b.right+1 || a.bottom<b.top-1 || a.top>b.bottom+1)) n++;
+                  }
+                }
+                return {n:n, total:els.length};
+            }""")
+            if lab["n"]:
+                report.append(f"⚠️ 景点标签有 {lab['n']} 处重叠（站点过密，放大查看即可）")
+            else:
+                report.append(f"✅ 景点标签无重叠（{lab['total']} 个常驻标签）")
+        except Exception:  # noqa: BLE001
+            report.append("⚠️ 标签避让自检跳过")
 
         # 联动自检（软检查）：点击左侧第一个站点，地图应飞至对应标记并弹窗。
         # 放在截图之后执行，避免点击产生的气泡进入 PNG 画面。
