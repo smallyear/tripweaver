@@ -462,6 +462,22 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     box-shadow: 0 2px 8px rgba(0,0,0,.12); }
   .stop-thumb { width: 100%; height: auto; border-radius: 8px; margin-top: 6px; display: block;
     box-shadow: 0 1px 4px rgba(0,0,0,.1); }
+  /* ============ 长行程截图：地图置顶 + 行程双栏（仅截图时启用） ============ */
+  body.layout-stack .wrap { display: flex; flex-direction: column; height: auto; }
+  body.layout-stack #map { order: 1; flex: none; width: 100%; }
+  body.layout-stack .sidebar {
+    order: 2; width: 100%; flex: none; overflow: visible; height: auto;
+    border-right: none; border-top: 1px solid #e4e9f0;
+    padding: 26px 30px 34px; column-count: 2; column-gap: 30px;
+  }
+  body.layout-stack .sidebar > * { break-inside: avoid; }
+  body.layout-stack .sidebar > .cover,
+  body.layout-stack .sidebar > h1,
+  body.layout-stack .sidebar > .meta,
+  body.layout-stack .sidebar > .style-switch,
+  body.layout-stack .sidebar > .tools { column-span: all; }
+  body.layout-stack .sidebar > .cover { max-width: 520px; margin: 0 auto 16px; }
+  body.layout-stack .stop-thumb { max-width: 320px; }
 </style>
 </head>
 <body>
@@ -587,12 +603,17 @@ function draw(){
       iconSize: [28,28], iconAnchor: [14,28] });
     var popup = '<div class="pop-title">第'+s.day+'天 '+(s.time||'')+' · '+esc(s.name)+'</div>'+(s.note?'<div class="pop-note">'+esc(s.note)+'</div>':'');
     var mk = L.marker(ll, { icon: icon }).addTo(routeLayer).bindPopup(popup);
+    mk._day = s.day;
     markersByIdx[s.__i] = mk;
     mk.on('click', function(){ highlightSidebar(s.__i); });  // 地图→左侧反联动
     // 常驻名称标签：每个数字标记旁直接显示景点名（无需点击）
     mk.bindTooltip(esc(s.name), { permanent: true, direction: 'right', offset: [10, 0], className: 'mlabel' });
     // 连续实线：按序连接所有站点（跨天也连），形成完整路线而非分段断线
-    if (prev) L.polyline([prev, ll], { color: color, weight: 4, opacity: .85, className: 'route-line' }).addTo(routeLayer);
+    if (prev) {
+      var seg = L.polyline([prev, ll], { color: color, weight: 4, opacity: .85, className: 'route-line' });
+      seg._day = s.day;
+      seg.addTo(routeLayer);
+    }
     prev = ll;
   });
   // 环线闭合：若首末站点同名（出发地=返程地），用虚线把终点连回起点
@@ -601,7 +622,9 @@ function draw(){
     var lIdx = -1;
     for (var i = stops.length - 1; i >= 0; i--) { if (stops[i].lat != null && stops[i].lng != null) { lIdx = i; break; } }
     if (fIdx >= 0 && lIdx >= 0 && stops[fIdx].name === stops[lIdx].name) {
-      L.polyline([pts[pts.length - 1], pts[0]], { color: DAYCOLORS[stops[fIdx].day] || '#4361ee', weight: 4, opacity: .85, dashArray: '2,8', className: 'route-line' }).addTo(routeLayer);
+      var closing = L.polyline([pts[pts.length - 1], pts[0]], { color: DAYCOLORS[stops[fIdx].day] || '#4361ee', weight: 4, opacity: .85, dashArray: '2,8', className: 'route-line' });
+      closing._day = stops[fIdx].day;
+      closing.addTo(routeLayer);
     }
   }
   window.__PTS__ = pts;
@@ -620,7 +643,8 @@ function declutterLabels(){
   var mapEl = document.getElementById('map');
   if (!mapEl) return;
   var mr = mapEl.getBoundingClientRect();
-  var els = Array.prototype.slice.call(document.querySelectorAll('.leaflet-tooltip.mlabel'));
+  var els = Array.prototype.slice.call(document.querySelectorAll('.leaflet-tooltip.mlabel'))
+    .filter(function(el){ return el.getClientRects().length > 0; });  // 跳过按天隐藏的标签
   if (!els.length) return;
   // 先清空上一轮的偏移，再按原始位置重新测量（DOM 顺序 = 站点顺序 = 优先级）
   els.forEach(function(el){ el.style.marginLeft = ''; el.style.marginTop = ''; });
@@ -652,6 +676,17 @@ map.on('moveend zoomend viewreset', scheduleDeclutter);
 window.addEventListener('resize', scheduleDeclutter);
 window.__declutter__ = declutterLabels;
 window.__setBasemap__ = function(i){ applyBasemap(i); draw(); fitAll(); };
+// 按天筛选地图图层（null = 全部显示）：每日地图卡只显示当天站点与路段
+window.__filterDay__ = function(days){
+  routeLayer.eachLayer(function(layer){
+    var show = !days || days.indexOf(layer._day) >= 0;
+    if (layer._icon) layer._icon.style.display = show ? '' : 'none';
+    var tip = layer.getTooltip && layer.getTooltip();
+    if (tip && tip.getElement()) tip.getElement().style.display = show ? '' : 'none';
+    if (layer.setStyle) layer.setStyle({ opacity: show ? 0.85 : 0 });
+  });
+  if (window.__declutter__) window.__declutter__();
+};
 window.__basemapId__ = function(){ return BASEMAPS[basemapIndex].id; };
 // ---- 风格主题：定义与切换（去商务感，多风格可切换） ----
 var THEME_DEFAULT_BM = '__DEF_BM__';
@@ -935,7 +970,33 @@ def verify_and_render(html_path, png_path, itin, want_png, basemap_count=1):
             sidebar_full = page.evaluate(
                 "() => { var s = document.getElementById('sidebar'); return s.scrollHeight; }"
             )
-            target = max(1000, sidebar_full + 44)
+            map_w = page.evaluate("() => document.getElementById('map').clientWidth")
+            # 版面自适应：行程文字远高于地图宽度时，地图不再被拉成竖长条，
+            # 改为「地图置顶 + 行程双栏」（否则地图内容只占上面一半，下面大片空白）
+            stack = sidebar_full > map_w * 1.15
+            if stack:
+                map_h = int(max(1100, min(1500, map_w * 0.95)))
+                page.evaluate(
+                    """(h) => {
+                        document.body.classList.add('layout-stack');
+                        var s = document.getElementById('sidebar');
+                        s.style.overflow = 'visible'; s.style.height = 'auto';
+                        document.querySelector('.wrap').style.height = 'auto';
+                        var el = document.getElementById('map');
+                        el.style.width = '100%'; el.style.height = h + 'px';
+                        var m = window.__MAP__;
+                        if (m) { m.invalidateSize(); if (window.__PTS__ && window.__PTS__.length) m.fitBounds(window.__PTS__, {padding:[50,50]}); }
+                    }""",
+                    map_h,
+                )
+                page.wait_for_timeout(400)
+                target = int(page.evaluate("() => Math.ceil(document.body.scrollHeight)")) + 4
+                report.append(
+                    f"ℹ️ 版面: 地图置顶 + 行程双栏（行程栏 {sidebar_full}px 过长，避免地图被拉成竖条）"
+                )
+            else:
+                target = max(1000, sidebar_full + 44)
+                report.append("ℹ️ 版面: 左右分栏（地图贴右侧）")
 
             # 极端高度安全上限：超过则无法在一张图内完整呈现，阻断并建议拆分
             if target > MAX_PNG_HEIGHT:
@@ -944,30 +1005,41 @@ def verify_and_render(html_path, png_path, itin, want_png, basemap_count=1):
                     f"❌ 行程过长({sidebar_full}px)，单张 PNG 上限 {MAX_PNG_HEIGHT}px 仍会截断，"
                     f"建议拆分行程为两段或多张后再生成"
                 )
-            elif target > 2600:
+            elif target > 2600 and not stack:
                 report.append(
                     f"⚠️ 行程较长，PNG 高度 {target}px（已完整渲染、无截断），建议拆分为多张便于查看/分享"
                 )
 
-            # 让整页随行程高度自适应：侧边栏展开、地图同步拉伸填充，保证文字永不裁切
-            page.evaluate(
-                """(h) => {
-                    var s = document.getElementById('sidebar');
-                    s.style.overflow = 'visible'; s.style.height = 'auto';
-                    document.querySelector('.wrap').style.height = 'auto';
-                    var el = document.getElementById('map'); el.style.height = h + 'px';
-                    var m = window.__MAP__;
-                    if (m) { m.invalidateSize(); if (window.__PTS__ && window.__PTS__.length) m.fitBounds(window.__PTS__, {padding:[40,40]}); }
-                }""",
-                target,
-            )
+            if not stack:
+                # 让整页随行程高度自适应：侧边栏展开、地图同步拉伸填充，保证文字永不裁切
+                page.evaluate(
+                    """(h) => {
+                        var s = document.getElementById('sidebar');
+                        s.style.overflow = 'visible'; s.style.height = 'auto';
+                        document.querySelector('.wrap').style.height = 'auto';
+                        var el = document.getElementById('map'); el.style.height = h + 'px';
+                        var m = window.__MAP__;
+                        if (m) { m.invalidateSize(); if (window.__PTS__ && window.__PTS__.length) m.fitBounds(window.__PTS__, {padding:[40,40]}); }
+                    }""",
+                    target,
+                )
             page.set_viewport_size({"width": 1600, "height": target})
             # 收起气泡并留足地图动画稳定时间，避免弹窗/半途动画被拍进 PNG
             page.evaluate("() => { if (window.__MAP__) window.__MAP__.closePopup(); }")
-            page.wait_for_timeout(1200)
+            page.wait_for_timeout(1000)
+            # 最终尺寸确定后再 fitBounds 一次：否则视口变化会打断动画，地图内容偏到上边
+            page.evaluate(
+                """() => {
+                    var m = window.__MAP__;
+                    if (m) { m.invalidateSize(); if (window.__PTS__ && window.__PTS__.length) m.fitBounds(window.__PTS__, {padding:[50,50]}); }
+                }"""
+            )
+            page.wait_for_timeout(400)
             # 布局变化后（拉高地图 + 重新 fitBounds）重跑一次标签避让，确保 PNG 里不压字
             page.evaluate("() => { if (window.__declutter__) window.__declutter__(); }")
-            page.wait_for_timeout(120)
+            # 截图里不出现缩放按钮等交互控件
+            page.evaluate("() => document.querySelectorAll('.leaflet-control-zoom').forEach(function(e){ e.style.display = 'none'; })")
+            page.wait_for_timeout(150)
             page.screenshot(path=str(png_path), full_page=True)
 
             # 截断校验：侧边栏完整内容是否落在图片高度内（无内部滚动条 = 未裁切）
@@ -975,10 +1047,10 @@ def verify_and_render(html_path, png_path, itin, want_png, basemap_count=1):
                 "() => { var s = document.getElementById('sidebar'); return s.scrollHeight <= document.body.scrollHeight + 2; }"
             )
             if fits:
-                report.append("✅ PNG 左侧行程完整无截断")
+                report.append("✅ PNG 行程文字完整无截断")
             else:
                 ok = False
-                report.append("❌ PNG 左侧行程疑似被截断（内容超出图片高度）")
+                report.append("❌ PNG 行程文字疑似被截断（内容超出图片高度）")
 
             # 尺寸校验
             try:
