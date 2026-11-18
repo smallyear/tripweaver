@@ -20,7 +20,7 @@
   },
   "勐腊县城": {
     "lat": 21.4619,
-    "lng": 101.5650,
+    "lng": 101.565,
     "coord_source": "wgs84",
     "note": "Photon『勐腊县』第 2 条[customs/city 级节点]；注意第 1 条 21.6551,101.4786 是县界标签点，离县城约 20km，不要用"
   },
@@ -38,7 +38,7 @@
   },
   "野象谷": {
     "lat": 22.1698,
-    "lng": 100.8640,
+    "lng": 100.864,
     "coord_source": "wgs84",
     "note": "Photon 命中 野象谷[zoo]（景洪市勐养）；同名的『野象谷[station]』22.1146,100.8538 是车站，不是景区"
   },
@@ -71,5 +71,257 @@
     "lng": 100.8054,
     "coord_source": "wgs84",
     "note": "Photon 命中 曼听公园[park]（景洪市），园内即西双版纳总佛寺"
+  },
+  "运城市": {
+    "lat": 35.027637,
+    "lng": 111.002141,
+    "coord_source": "wgs84",
+    "note": "Photon place=city，山西运城盐湖区"
+  },
+  "聊城古城": {
+    "lat": 36.4488354,
+    "lng": 115.9640514,
+    "coord_source": "wgs84",
+    "note": "Photon tourism=museum，山东聊城古城（光岳楼/东昌湖所在）"
+  },
+  "东昌湖": {
+    "lat": 36.444142,
+    "lng": 115.9550285,
+    "coord_source": "wgs84",
+    "note": "Photon water=moat，山东聊城"
+  },
+  "滨州市": {
+    "lat": 37.3821206,
+    "lng": 117.9647262,
+    "coord_source": "wgs84",
+    "note": "Photon place=city，山东滨州"
+  },
+  "东营市": {
+    "lat": 37.4334738,
+    "lng": 118.6689349,
+    "coord_source": "wgs84",
+    "note": "Photon place=city，山东东营"
+  },
+  "黄河口": {
+    "lat": 37.6930658,
+    "lng": 118.8473838,
+    "coord_source": "wgs84",
+    "note": "Photon place=town，黄河口镇（黄河口生态旅游区门户）"
+  },
+  "黄河三角洲国家级自然保护区": {
+    "lat": 37.745235,
+    "lng": 119.1133749,
+    "coord_source": "wgs84",
+    "note": "Photon leisure=nature_reserve，山东东营黄河口"
+  },
+  "蓬莱阁": {
+    "lat": 37.826258,
+    "lng": 120.748865,
+    "coord_source": "wgs84",
+    "note": "Photon tourism=attraction，山东烟台蓬莱"
+  },
+  "三仙山景区": {
+    "lat": 37.8207367,
+    "lng": 120.7786743,
+    "coord_source": "wgs84",
+    "note": "Photon tourism=attraction，山东烟台蓬莱"
+  },
+  "八仙过海景区": {
+    "lat": 37.8247949,
+    "lng": 120.7708076,
+    "coord_source": "wgs84",
+    "note": "Photon leisure=park，山东烟台蓬莱"
+  },
+  "烟台山景区": {
+    "lat": 37.5436373,
+    "lng": 121.395219,
+    "coord_source": "wgs84",
+    "note": "Photon place=quarter，山东烟台"
+  },
+  "烟台市": {
+    "lat": 37.461928,
+    "lng": 121.4425255,
+    "coord_source": "wgs84",
+    "note": "Photon place=city，山东烟台"
+  },
+  "刘公岛": {
+    "lat": 37.4992081,
+    "lng": 122.1852891,
+    "coord_source": "wgs84",
+    "note": "Photon place=village，山东威海"
+  },
+  "威海市": {
+    "lat": 37.5120997,
+    "lng": 122.1152599,
+    "coord_source": "wgs84",
+    "note": "Photon place=city，山东威海"
+  },
+  "火炬八街": {
+    "lat": 37.5217755,
+    "lng": 122.0263904,
+    "coord_source": "wgs84",
+    "note": "Photon highway=residential，山东威海"
+  },
+  "青州古城": {
+    "lat": 36.6773587,
+    "lng": 118.4734569,
+    "coord_source": "wgs84",
+    "note": "Photon historic=ruins，山东潍坊青州"
+  },
+  "曲阜市": {
+    "lat": 35.5956915,
+    "lng": 116.987543,
+    "coord_source": "wgs84",
+    "note": "Photon place=city，山东济宁曲阜"
+  },
+  "孔庙": {
+    "lat": 35.5951635,
+    "lng": 116.9843791,
+    "coord_source": "wgs84",
+    "note": "Photon amenity=place_of_worship，山东曲阜"
+  },
+  "孔府": {
+    "lat": 35.5971833,
+    "lng": 116.986042,
+    "coord_source": "wgs84",
+    "note": "Photon tourism=attraction，山东曲阜"
+  },
+  "洛阳市": {
+    "lat": 34.6196539,
+    "lng": 112.4477046,
+    "coord_source": "wgs84",
+    "note": "Photon place=city，河南洛阳"
+  },
+  "开封市": {
+    "lat": 34.7990966,
+    "lng": 114.3054796,
+    "coord_source": "wgs84",
+    "note": "Photon place=city，河南开封"
+  },
+  "三门峡市": {
+    "lat": 34.7678842,
+    "lng": 111.1908398,
+    "coord_source": "wgs84",
+    "note": "Photon place=city，河南三门峡"
+  },
+  "潍坊市": {
+    "lat": 36.7074551,
+    "lng": 119.1558166,
+    "coord_source": "wgs84",
+    "note": "Photon place=city，山东潍坊"
+  },
+  "蓬莱区": {
+    "lat": 37.7949103,
+    "lng": 120.824268,
+    "coord_source": "wgs84",
+    "note": "Photon place=city，山东烟台蓬莱"
+  },
+  "春熙路": {
+    "lat": 30.657285,
+    "lng": 104.074107,
+    "coord_source": "wgs84",
+    "note": "Photon highway=pedestrian 春熙路步行街（四川成都锦江区）"
+  },
+  "大慈寺": {
+    "lat": 30.656483,
+    "lng": 104.081154,
+    "coord_source": "wgs84",
+    "note": "Photon amenity=place_of_worship，太古里中间（四川成都）"
+  },
+  "盘飧市": {
+    "lat": 30.6584,
+    "lng": 104.075,
+    "coord_source": "wgs84",
+    "note": "华兴街 62-63 号（春熙路西侧），按街道手工定位；OSM 无该店 POI"
+  },
+  "正科甲巷": {
+    "lat": 30.658956,
+    "lng": 104.076603,
+    "coord_source": "wgs84",
+    "note": "Photon highway=living_street（四川成都春熙路街道）"
+  },
+  "文殊院": {
+    "lat": 30.6779,
+    "lng": 104.070206,
+    "coord_source": "wgs84",
+    "note": "Photon landuse=religious（四川成都草市街街道）；同名 railway=station 在西南 500m，勿用"
+  },
+  "人民公园": {
+    "lat": 30.659719,
+    "lng": 104.054821,
+    "coord_source": "wgs84",
+    "note": "Photon leisure=park（四川成都少城街道），鹤鸣茶社/钟水饺都在园内"
+  },
+  "宽窄巷子": {
+    "lat": 30.666194,
+    "lng": 104.050808,
+    "coord_source": "wgs84",
+    "note": "Photon tourism=attraction（四川成都少城街道）；第 1 条 result 是地铁站，勿用"
+  },
+  "奎星楼街": {
+    "lat": 30.670637,
+    "lng": 104.051641,
+    "coord_source": "wgs84",
+    "note": "Photon highway=residential（宽窄巷子北侧，四川成都）"
+  },
+  "成都川菜博物馆": {
+    "lat": 30.897855,
+    "lng": 103.927874,
+    "coord_source": "wgs84",
+    "note": "Photon tourism=museum，郫都区古城镇荣华北巷 8 号（四川成都）"
+  },
+  "玉林西路": {
+    "lat": 30.631832,
+    "lng": 104.053554,
+    "coord_source": "wgs84",
+    "note": "Photon highway=tertiary（四川成都玉林片区）"
+  },
+  "马鞍北路": {
+    "lat": 30.68024,
+    "lng": 104.085147,
+    "coord_source": "wgs84",
+    "note": "Photon highway=secondary（四川成都驷马桥街道，甘记肥肠粉所在街）"
+  },
+  "青华路": {
+    "lat": 30.665017,
+    "lng": 104.026737,
+    "coord_source": "wgs84",
+    "note": "Photon highway=secondary（四川成都草堂街道，陈麻婆豆腐总店所在街）"
+  },
+  "杜甫草堂": {
+    "lat": 30.662853,
+    "lng": 104.026229,
+    "coord_source": "wgs84",
+    "note": "Photon leisure=park（四川成都草堂街道）"
+  },
+  "外曹家巷": {
+    "lat": 30.675856,
+    "lng": 104.085895,
+    "coord_source": "wgs84",
+    "note": "Photon highway=residential（四川成都驷马桥街道，明婷饭店所在巷）"
+  },
+  "总府路": {
+    "lat": 30.660868,
+    "lng": 104.073994,
+    "coord_source": "wgs84",
+    "note": "Photon highway=bus_stop（四川成都春熙路街道，龙抄手总店所在街）"
+  },
+  "建设巷": {
+    "lat": 30.672034,
+    "lng": 104.100845,
+    "coord_source": "wgs84",
+    "note": "Photon highway=residential（四川成都猛追湾街道，电子科大旁小吃街）"
+  },
+  "蜀锦织绣博物馆": {
+    "lat": 30.659763,
+    "lng": 104.034509,
+    "coord_source": "wgs84",
+    "note": "Photon tourism=museum，草堂东路 2 号（四川成都）"
+  },
+  "成都双流国际机场": {
+    "lat": 30.554778,
+    "lng": 103.947907,
+    "coord_source": "wgs84",
+    "note": "Photon aeroway=aerodrome；注意与天府国际机场（简阳，104.44）区分"
   }
 }
