@@ -145,12 +145,18 @@ def _prepare_map_itin(mod, itin):
         glng, glat = mod.wgs84_to_gcj02(float(s["lng"]), float(s["lat"]))
         if (glng, glat) != (float(s["lng"]), float(s["lat"])):
             s["lng_gcj"], s["lat_gcj"] = glng, glat
+    # 与主地图同口径：大交通端点移出地图范围，海报/日卡才不会被拉到全国尺度
+    mod.compute_map_scope(itin)
 
 
 def route_aspect(stops):
     """路线包围盒宽高比（经度按中心纬度修正），用于决定地图画幅高矮。"""
+    # 只看地图范围内的点（大交通端点会把包围盒拉到大区级，画幅算出来必然不对）
     pts = [(float(s["lng"]), float(s["lat"])) for s in stops
-           if s.get("lat") is not None and s.get("lng") is not None]
+           if s.get("lat") is not None and s.get("lng") is not None and not s.get("offmap")]
+    if len(pts) < 2:
+        pts = [(float(s["lng"]), float(s["lat"])) for s in stops
+               if s.get("lat") is not None and s.get("lng") is not None]
     if len(pts) < 2:
         return 1.0
     lngs = [x[0] for x in pts]
@@ -179,6 +185,7 @@ def key_map_labels(stops, max_n=5):
         name = s.get("name") or ""
         if (not name or len(name) > 10 or name.endswith("市")
                 or any(k in name for k in skip)
+                or s.get("offmap")
                 or s.get("lat") is None or s.get("lng") is None):
             continue
         if name in seen:
@@ -257,9 +264,13 @@ def render_map_shots(itin, shots, out_dir):
                         m.invalidateSize();
                         document.querySelectorAll('.leaflet-tooltip.mlabel').forEach(function(x){ x.style.display = ''; });
                         if (window.__filterDay__) window.__filterDay__(a.days || null);
+                        // 按天取点时要排除大交通端点（offmap），否则单日卡被拉到全国尺度
                         var pts = a.days
-                            ? stops.filter(function(s){ return a.days.indexOf(s.day) >= 0 && s.lat != null; }).map(coordOf)
+                            ? stops.filter(function(s){ return a.days.indexOf(s.day) >= 0 && s.lat != null && !s.offmap; }).map(coordOf)
                             : window.__PTS__;
+                        if (a.days && !pts.length) {
+                            pts = stops.filter(function(s){ return a.days.indexOf(s.day) >= 0 && s.lat != null; }).map(coordOf);
+                        }
                         if (!pts || !pts.length) pts = window.__PTS__;
                         if (!pts || !pts.length) return 'no-points';
                         // 视口尺寸刚变过，立刻 fit 会按旧尺寸算缩放；延后再 fit 一次才准
@@ -486,6 +497,7 @@ def build_cover(itin, illu_dir):
         drange = sd.strftime("%Y.%m.%d")
     travelers = trip.get("travelers", "")
     cov = cover_path(illu_dir)
+    tsize = 84 if len(title) <= 14 else (72 if len(title) <= 18 else 62)
 
     css = """
     .hero{position:relative;width:100%;height:100%;}
@@ -495,11 +507,12 @@ def build_cover(itin, illu_dir):
       background:linear-gradient(180deg,rgba(247,239,224,.30) 0%,rgba(247,239,224,.78) 58%,rgba(247,239,224,.94) 100%);}
     .center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:0 120px;}
     .kicker{font-size:30px;color:#8a7558;letter-spacing:6px;margin-bottom:14px;}
-    .title{font-size:84px;color:#3f362b;line-height:1.18;text-shadow:0 2px 10px rgba(255,255,255,.5);}
+    .title{font-size:__TITLE_SIZE__px;color:#3f362b;line-height:1.18;text-shadow:0 2px 10px rgba(255,255,255,.5);}
     .rule{width:300px;height:4px;background:#c98a4b;border-radius:4px;margin:34px 0;}
     .meta{font-size:34px;color:#5a4f40;}
     .sub{font-size:28px;color:#8a7558;margin-top:14px;}
     """
+    css = css.replace("__TITLE_SIZE__", str(tsize))
     bg = render_img(cov, w=1600, h=1000) if cov else '<div class="bgph"></div>'
     body = f"""
       {bg}
@@ -705,6 +718,18 @@ def build_day_map_card(day, day_stops, sd, map_ref, trip):
     region = headline.get("region", "")
     theme = ((trip.get("theme") or "").replace("／", "/").split("/")[0]).strip()
 
+    # 转移日徽标：当天有被移出地图范围的大交通端点时标出来（抵达 / 返程）
+    offs = [i for i, x in enumerate(day_stops) if x.get("offmap")]
+    ttag = ""
+    if offs:
+        if day_stops[0].get("offmap") and day_stops[-1].get("offmap"):
+            ttag = "✈ 转场日"
+        elif day_stops[0].get("offmap"):
+            ttag = "✈ 抵达日"
+        else:
+            ttag = "✈ 返程日"
+    ttag_html = f'<span class="ttag">{esc(ttag)}</span>' if ttag else ""
+
     rows = ""
     for x in day_stops[:6]:
         note = f'<div class="note">{esc(x["note"])}</div>' if x.get("note") else ""
@@ -719,6 +744,8 @@ def build_day_map_card(day, day_stops, sd, map_ref, trip):
     .date{display:inline-block;margin-left:16px;font-size:26px;color:#8a7558}
     .headline{font-size:__NSIZE__px;line-height:1.2;margin-top:14px}
     .region{font-size:24px;color:#8a7558;margin-top:6px}
+    .ttag{display:inline-block;margin-left:12px;font-size:22px;color:#8a7558;
+      border:2px dashed #d8c4a0;border-radius:20px;padding:3px 16px;vertical-align:6px}
     .mapbox{position:absolute;left:0;top:236px;width:100%;height:__MAPH__px;overflow:hidden}
     .mapbox img{width:100%;height:100%;object-fit:cover;display:block}
     .mapveil{position:absolute;inset:0;
@@ -737,7 +764,7 @@ def build_day_map_card(day, day_stops, sd, map_ref, trip):
               .replace("__NTF__", str(nt_f)).replace("__NTMB__", str(nt_mb)))
     body = f"""
       <div class="hd">
-        <div><span class="badge">DAY {day}</span><span class="date">{esc(date)}</span></div>
+        <div><span class="badge">DAY {day}</span><span class="date">{esc(date)}</span>{ttag_html}</div>
         <div class="headline">{esc(headline["name"])}</div>
         <div class="region">{esc(region)}</div>
       </div>

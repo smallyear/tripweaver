@@ -12,6 +12,8 @@
 - HTML 用 Leaflet + OpenStreetMap（浏览器直接打开即可缩放/拖动）。
 - PNG 用 Playwright 截图（需 pip install playwright；优先复用系统 Chrome）。
 - 自检：HTML 无占位符残留/无 JS 错误/行程与标记齐全/地图瓦片加载；PNG 无截断且尺寸正常。
+- 地图范围：首/末腿 > trip.map_split_km（默认 400km）视为大交通，移出 fitBounds（仍画灰虚线 + 角落提示条），
+  避免「西安 ✈ 丽江」把地图拉到全国尺度、区内动线挤成一坨；trip.map_scope="full" 可强制全程。
   任一关键项失败会以退出码 1 中止，提醒「不要交付，先排查」。
 """
 import argparse
@@ -71,8 +73,12 @@ def route_aspect(stops):
 
     宽路线（如运城→胶东）用矮横幅；南北向路线用高一点的画幅，避免地图大半是空白。
     """
+    # 只按地图范围内的点算画幅：大交通端点会把包围盒拉到大区级，算出来必然偏矮
     pts = [(float(s["lng"]), float(s["lat"])) for s in stops
-           if s.get("lat") is not None and s.get("lng") is not None]
+           if s.get("lat") is not None and s.get("lng") is not None and not s.get("offmap")]
+    if len(pts) < 2:
+        pts = [(float(s["lng"]), float(s["lat"])) for s in stops
+               if s.get("lat") is not None and s.get("lng") is not None]
     if len(pts) < 2:
         return 1.0
     lngs = [p[0] for p in pts]
@@ -369,6 +375,89 @@ def straight_km(lat1, lng1, lat2, lng2):
     return (dx * dx + dy * dy) ** 0.5
 
 
+def compute_map_scope(itin):
+    """判定「大交通转移」并把它移出地图范围（scale 问题）。
+
+    典型场景：西安 ✈ 丽江（1191km）把包围盒撑到 1500km，而区内动线只有 ~110km，
+    比例尺差 14 倍，地图 90% 是空白、景点挤成一团。
+
+    规则（保守）：
+      - 只切**首腿与末腿**（抵达/返程），中间的长腿不动（跨省自驾要看得见）；
+      - 长度 > trip.map_split_km（默认 400）才切；
+      - stop.map_skip=true 可单点强制移出；trip.map_scope="full" 则整趟不切；
+      - 切完后可见点 < 2 则放弃切分（避免把两天短途切没了）。
+
+    被切的 stop 标记 offmap=true，前端不建标记、不参与 fitBounds，但仍画一条虚线
+    指向画布外，并在角落用 chip 注明「大交通未按比例」。
+    """
+    trip = itin.get("trip", {})
+    stops = itin.get("stops") or []
+    for s in stops:
+        s.pop("offmap", None)
+    try:
+        split = float(trip.get("map_split_km") or 400)
+    except (TypeError, ValueError):
+        split = 400.0
+    mode = str(trip.get("map_scope") or "local").lower()
+
+    idx = [i for i, s in enumerate(stops)
+           if s.get("name") and s.get("lat") is not None and s.get("lng") is not None]
+    hidden, transfers = [], []
+
+    def km(i, j):
+        a, b = stops[i], stops[j]
+        return straight_km(float(a["lat"]), float(a["lng"]),
+                           float(b["lat"]), float(b["lng"]))
+
+    def icon(i, j):
+        name = (stops[i].get("name") or "") + (stops[j].get("name") or "")
+        if "机场" in name or "航站楼" in name:
+            return "✈"
+        if any(k in name for k in ("高铁", "火车站", "动车站", "客运站")):
+            return "🚄"
+        return "🚗"
+
+    def record(i, j):
+        return {
+            "from": stops[i].get("name"),
+            "to": stops[j].get("name"),
+            "km": int(round(km(i, j))),
+            "tfrom": stops[i].get("time") or "",
+            "tto": stops[j].get("time") or "",
+            "days": sorted({d for d in (stops[i].get("day"), stops[j].get("day")) if d is not None}),
+            "mode": icon(i, j),
+        }
+
+    if mode != "full" and len(idx) >= 2:
+        first, second = idx[0], idx[1]
+        last, before_last = idx[-1], idx[-2]
+        if km(first, second) > split:
+            hidden.append(first)
+            transfers.append(record(first, second))
+        if last not in hidden and last != first and km(before_last, last) > split:
+            hidden.append(last)
+            transfers.append(record(before_last, last))
+        for i in idx:
+            if stops[i].get("map_skip") and i not in hidden:
+                hidden.append(i)
+        if len(idx) - len(hidden) < 2:
+            hidden, transfers = [], []
+
+    for i in hidden:
+        stops[i]["offmap"] = True
+    scope = {
+        "mode": "full" if not hidden and mode == "full" else "local",
+        "split_km": split,
+        "hidden": [stops[i].get("name") for i in hidden],
+        "transfers": transfers,
+    }
+    if hidden:
+        itin["map_scope"] = scope
+    else:
+        itin.pop("map_scope", None)
+    return scope
+
+
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="zh">
 <head>
@@ -383,6 +472,18 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   .sidebar { width: 380px; flex: 0 0 380px; overflow-y: auto; padding: 22px 18px; background: #f7f9fc; border-right: 1px solid #e4e9f0; }
   .sidebar h1 { font-size: 21px; margin: 0 0 6px; }
   .meta { font-size: 12px; color: #5b6b7c; margin-bottom: 16px; line-height: 1.7; }
+  .info-date { font-size: 11.5px; color: #9aa5b1; margin: -8px 0 14px; line-height: 1.6; }
+  /* 大交通提示条：被移出地图范围的长途段（航班/高铁），不按比例 */
+  .transfer-chip { position: absolute; left: 14px; bottom: 26px; z-index: 900;
+    max-width: min(48%, 560px); background: rgba(255,255,255,.95); border: 1px solid #dde4ec;
+    border-radius: 11px; padding: 9px 13px; font-size: 13px; line-height: 1.65; color: #33414f;
+    box-shadow: 0 2px 8px rgba(0,0,0,.12); pointer-events: none; }
+  .transfer-chip .tc-row + .tc-row { border-top: 1px dashed #eef1f5; padding-top: 4px; margin-top: 4px; }
+  .transfer-chip .tc-ico { margin-right: 4px; }
+  .transfer-chip .tc-km, .transfer-chip .tc-time { color: #8a97a5; margin-left: 6px; white-space: nowrap; }
+  .transfer-chip .tc-hint { color: #97a4b1; font-size: 11px; margin-top: 3px; }
+  body.theme-watercolor .transfer-chip { background: rgba(255,253,246,.95); border-color: #e8dcc4; color: #6b4f2a; }
+  body.theme-vintage .transfer-chip { background: rgba(253,248,236,.95); border-color: #d9c9a8; color: #5a4626; }
   .tools { display: flex; gap: 8px; margin-bottom: 12px; }
   .tbtn { font-size: 12px; padding: 4px 10px; border: 1px solid #cdd6e0; background: #fff; border-radius: 6px; cursor: pointer; color: #3a4a5a; }
   .tbtn:hover { background: #eef3fb; }
@@ -493,6 +594,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   body.layout-stack .sidebar > .cover,
   body.layout-stack .sidebar > h1,
   body.layout-stack .sidebar > .meta,
+  body.layout-stack .sidebar > .info-date,
   body.layout-stack .sidebar > .style-switch,
   body.layout-stack .sidebar > .tools { column-span: all; }
   body.layout-stack .sidebar > .cover { max-width: 520px; margin: 0 auto 16px; }
@@ -544,16 +646,44 @@ ss.addEventListener('click', function(e){
 sb.appendChild(ss);
 var h1 = document.createElement('h1'); h1.textContent = trip.title || '旅行行程'; sb.appendChild(h1);
 var meta = document.createElement('div'); meta.className = 'meta';
-meta.innerHTML = [trip.destination, trip.start_date, trip.days ? trip.days+'天' : '', trip.travelers, trip.budget, trip.theme]
+// trip.budget 既可能是旧版字符串，也可能是对象（{basis, total, items}）——对象只取口径或合计展示
+var budgetText = trip.budget;
+if (trip.budget && typeof trip.budget === 'object') {
+  var bsum = 0, bpct = Number(trip.budget.contingency_pct == null ? 10 : trip.budget.contingency_pct);
+  (trip.budget.items || []).forEach(function(it){ bsum += Number(it.amount || 0); });
+  budgetText = trip.budget.basis
+    ? trip.budget.basis + (bsum ? ' ¥' + Math.round(bsum * (1 + bpct / 100)).toLocaleString() : '')
+    : (trip.budget.total ? '¥' + Number(trip.budget.total).toLocaleString() : '');
+}
+meta.innerHTML = [trip.destination, trip.start_date, trip.days ? trip.days+'天' : '', trip.travelers, budgetText, trip.theme]
   .filter(Boolean).map(esc).join(' · ');
 sb.appendChild(meta);
+if (trip.info_date) {
+  var idl = document.createElement('div'); idl.className = 'info-date';
+  idl.textContent = '信息基准日 ' + trip.info_date + ' · 价格/时间/政策以该日检索为准，出发前请复核';
+  sb.appendChild(idl);
+}
 // 折叠工具条：全部展开 / 全部折叠
 var tools = document.createElement('div'); tools.className = 'tools';
 var btnAll = document.createElement('button'); btnAll.textContent = '全部展开'; btnAll.className = 'tbtn';
 btnAll.onclick = function(){ document.querySelectorAll('#sidebar .day').forEach(function(x){ x.classList.remove('collapsed'); }); };
 var btnNone = document.createElement('button'); btnNone.textContent = '全部折叠'; btnNone.className = 'tbtn';
 btnNone.onclick = function(){ document.querySelectorAll('#sidebar .day').forEach(function(x){ x.classList.add('collapsed'); }); };
-tools.appendChild(btnAll); tools.appendChild(btnNone); sb.appendChild(tools);
+tools.appendChild(btnAll); tools.appendChild(btnNone);
+// 有大交通端点时，多一个「看全程 / 只看区内」切换（默认区内，避免比例尺被拉爆）
+if (stops.some(function(s){ return s.offmap; })) {
+  var btnScope = document.createElement('button');
+  btnScope.className = 'tbtn'; btnScope.id = 'scopeBtn';
+  btnScope.textContent = '看全程';
+  btnScope.title = '大交通（航班/高铁）已移出地图范围，点这里切换为全国尺度';
+  btnScope.onclick = function(){
+    __scopeFull = !__scopeFull;
+    btnScope.textContent = __scopeFull ? '只看区内' : '看全程';
+    draw(); fitAll();
+  };
+  tools.appendChild(btnScope);
+}
+sb.appendChild(tools);
 var byDay = {};
 stops.forEach(function(s){ (byDay[s.day] = byDay[s.day] || []).push(s); });
 var COLLAPSED = (ITIN.trip && ITIN.trip.collapsed_days) || [];  // 默认折叠的天（数组，如 [3]）
@@ -593,7 +723,9 @@ var BASEMAPS = __BASEMAPS__;
 var routeLayer = L.layerGroup().addTo(map);
 var tileLayer = null;
 var basemapIndex = 0;
-var pts = [];
+var pts = [];      // 地图范围内（区内）的点，决定 fitBounds
+var allPts = [];   // 含大交通端点
+var __scopeFull = false;  // false=只看区内（默认）；true=看全程
 
 // 高德底图用 GCJ-02 坐标，OSM/CARTO 用原始 WGS-84
 function coordOf(s){
@@ -612,47 +744,79 @@ function draw(){
   routeLayer.clearLayers();
   markersByIdx = {};
   pts = [];
-  var prev = null;
+  allPts = [];
+  var prev = null, prevOff = false;
   stops.forEach(function(s){
     if (s.lat == null || s.lng == null) return;
-    var ll = coordOf(s); pts.push(ll);
+    var ll = coordOf(s); allPts.push(ll);
+    // offmap：大交通端点（出发地/返程地），默认不占地图范围；切「看全程」后仍显示
+    var off = !!s.offmap && !__scopeFull;
     var color = DAYCOLORS[s.day] || '#4361ee';
-    var icon = L.divIcon({ className: 'route-marker-wrap', html:
-      '<div class="route-marker" style="--mk-bg:'+color+'"><span>'+s.day+'</span></div>',
-      iconSize: [28,28], iconAnchor: [14,28] });
-    var popup = '<div class="pop-title">第'+s.day+'天 '+(s.time||'')+' · '+esc(s.name)+'</div>'+(s.note?'<div class="pop-note">'+esc(s.note)+'</div>':'');
-    var mk = L.marker(ll, { icon: icon }).addTo(routeLayer).bindPopup(popup);
-    mk._day = s.day;
-    mk._name = s.name;
-    markersByIdx[s.__i] = mk;
-    mk.on('click', function(){ highlightSidebar(s.__i); });  // 地图→左侧反联动
-    // 常驻名称标签：每个数字标记旁直接显示景点名（无需点击）
-    mk.bindTooltip(esc(s.name), { permanent: true, direction: 'right', offset: [10, 0], className: 'mlabel' });
-    // 连续实线：按序连接所有站点（跨天也连），形成完整路线而非分段断线
+    // 大交通段用灰虚线：即使两端都可见也保持虚线，与区内实线动线区分
+    var dashed = !!s.offmap || prevOff;
     if (prev) {
-      var seg = L.polyline([prev, ll], { color: color, weight: 4, opacity: .85, className: 'route-line' });
+      var seg = L.polyline([prev, ll], dashed
+        ? { color: '#93a1b0', weight: 3, opacity: .75, dashArray: '7,9', className: 'route-line transfer-line' }
+        : { color: color, weight: 4, opacity: .85, className: 'route-line' });
       seg._day = s.day;
+      seg._transfer = dashed;
       seg.addTo(routeLayer);
     }
-    prev = ll;
+    if (!off) {
+      pts.push(ll);
+      var icon = L.divIcon({ className: 'route-marker-wrap', html:
+        '<div class="route-marker" style="--mk-bg:'+color+'"><span>'+s.day+'</span></div>',
+        iconSize: [28,28], iconAnchor: [14,28] });
+      var popup = '<div class="pop-title">第'+s.day+'天 '+(s.time||'')+' · '+esc(s.name)+'</div>'+(s.note?'<div class="pop-note">'+esc(s.note)+'</div>':'');
+      var mk = L.marker(ll, { icon: icon }).addTo(routeLayer).bindPopup(popup);
+      mk._day = s.day;
+      mk._name = s.name;
+      markersByIdx[s.__i] = mk;
+      mk.on('click', function(){ highlightSidebar(s.__i); });  // 地图→左侧反联动
+      // 常驻名称标签：每个数字标记旁直接显示景点名（无需点击）
+      mk.bindTooltip(esc(s.name), { permanent: true, direction: 'right', offset: [10, 0], className: 'mlabel' });
+    }
+    prev = ll; prevOff = off;
   });
-  // 环线闭合：若首末站点同名（出发地=返程地），用虚线把终点连回起点
+  // 环线闭合：仅当首末站点同名且都在地图范围内（西安↔西安 这种出发地往返不画）
   if (pts.length > 2) {
-    var fIdx = stops.findIndex(function(s){ return s.lat != null && s.lng != null; });
+    var fIdx = stops.findIndex(function(s){ return s.lat != null && s.lng != null && !(s.offmap && !__scopeFull); });
     var lIdx = -1;
-    for (var i = stops.length - 1; i >= 0; i--) { if (stops[i].lat != null && stops[i].lng != null) { lIdx = i; break; } }
-    if (fIdx >= 0 && lIdx >= 0 && stops[fIdx].name === stops[lIdx].name) {
+    for (var i = stops.length - 1; i >= 0; i--) { if (stops[i].lat != null && stops[i].lng != null && !(stops[i].offmap && !__scopeFull)) { lIdx = i; break; } }
+    if (fIdx >= 0 && lIdx >= 0 && fIdx !== lIdx && stops[fIdx].name === stops[lIdx].name) {
       var closing = L.polyline([pts[pts.length - 1], pts[0]], { color: DAYCOLORS[stops[fIdx].day] || '#4361ee', weight: 4, opacity: .85, dashArray: '2,8', className: 'route-line' });
       closing._day = stops[fIdx].day;
       closing.addTo(routeLayer);
     }
   }
-  window.__PTS__ = pts;
+  window.__ALLPTS__ = allPts;
+  window.__PTS__ = pts.length ? pts : allPts;
   scheduleDeclutter();
 }
 function fitAll(){
-  if (pts.length) map.fitBounds(pts, { padding: [40,40] }); else map.setView([35,105], 4);
+  var use = __scopeFull || !pts.length ? allPts : pts;
+  if (use.length) map.fitBounds(use, { padding: [40,40] }); else map.setView([35,105], 4);
 }
+
+// ---- 大交通提示条：说明哪些长途段被移出地图范围（不按比例） ----
+(function buildTransferChip(){
+  var sc = ITIN.map_scope, rows = (sc && sc.transfers) || [];
+  if (!rows.length) return;
+  var chip = document.createElement('div');
+  chip.className = 'transfer-chip'; chip.id = 'transferChip';
+  chip.innerHTML = rows.map(function(t){
+    var dur = (t.tfrom || t.tto)
+      ? '<span class="tc-time">'+esc(t.tfrom || '')+(t.tfrom && t.tto ? ' → ' : '')+esc(t.tto || '')+'</span>'
+      : '';
+    return '<div class="tc-row" data-days="'+(t.days || []).join(',')+'">'
+      + '<span class="tc-ico">'+(t.mode || '\u2708')+'</span>'
+      + esc(t.from)+' → '+esc(t.to)
+      + '<span class="tc-km">直线约 '+Number(t.km || 0).toLocaleString()+' km</span>'
+      + dur + '</div>';
+  }).join('') + '<div class="tc-hint">大交通未按比例绘制</div>';
+  var host = document.getElementById('map');
+  if (host) host.appendChild(chip);
+})();
 
 // ---- 标签避让：常驻景点名重叠时按优先级微调偏移，不隐藏任何名字 ----
 // 站点密集（如景洪机场↔傣族园、野象谷↔大渡岗）时，右侧标签会互相压住；
@@ -715,6 +879,20 @@ window.__filterDay__ = function(days){
     if (tip && tip.getElement()) tip.getElement().style.display = show ? '' : 'none';
     if (layer.setStyle) layer.setStyle({ opacity: show ? 0.85 : 0 });
   });
+  // 大交通提示条也跟着按天过滤（单日地图卡只显示当天的转移段）
+  var chip = document.getElementById('transferChip');
+  if (chip) {
+    var any = false;
+    chip.querySelectorAll('.tc-row').forEach(function(row){
+      var ds = (row.getAttribute('data-days') || '').split(',').filter(Boolean).map(Number);
+      var show = !days || ds.some(function(d){ return days.indexOf(d) >= 0; });
+      row.style.display = show ? '' : 'none';
+      if (show) any = true;
+    });
+    var hint = chip.querySelector('.tc-hint');
+    if (hint) hint.style.display = (any || !days) ? '' : 'none';
+    chip.style.display = (any || !days) ? '' : 'none';
+  }
   if (window.__declutter__) window.__declutter__();
 };
 window.__basemapId__ = function(){ return BASEMAPS[basemapIndex].id; };
@@ -972,12 +1150,16 @@ def verify_and_render(html_path, png_path, itin, want_png, basemap_count=1):
             report.append(f"✅ 底图瓦片已加载: {tiles_loaded}/{tiles_total}")
 
         markers = page.evaluate("() => document.querySelectorAll('#map .leaflet-marker-icon').length")
-        expected_markers = len([s for s in itin.get("stops", []) if s.get("lat") is not None and s.get("lng") is not None])
+        expected_markers = len([s for s in itin.get("stops", [])
+                                if s.get("lat") is not None and s.get("lng") is not None
+                                and not s.get("offmap")])
         if markers < expected_markers:
             report.append(f"⚠️ 地图标记缺失: 渲染={markers} 应有={expected_markers}"
                           f"（多为地理编码失败，请手填 lat/lng 后重跑）")
+        elif markers > expected_markers:
+            report.append(f"⚠️ 地图标记偏多: 渲染={markers} 应有={expected_markers}（大交通端点应不建标记）")
         else:
-            report.append(f"✅ 地图标记齐全: {markers}")
+            report.append(f"✅ 地图标记齐全: {markers}" + ("（已略过大交通端点）" if itin.get("map_scope") else ""))
 
         # 联动自检放到 PNG 截图之后（点击会打开气泡，若在截图前做会污染 PNG 画面）
 
@@ -1267,6 +1449,16 @@ def main():
             s.pop(k, None)
 
     basemap_ids = plan_basemaps(itin)
+
+    # 大交通跨度太大时把它移出地图范围，否则包围盒被拉到大区级、区内动线挤成一团
+    scope = compute_map_scope(itin)
+    if scope.get("transfers"):
+        visible = len([s for s in itin.get("stops", []) if s.get("lat") is not None and not s.get("offmap")])
+        print("\n--- 地图范围 ---")
+        print(f"  已将大交通（>{scope['split_km']:g}km 的首/末腿）移出地图范围，主图只画区内 {visible} 站：")
+        for t in scope["transfers"]:
+            print(f"    {t['mode']} {t['from']} → {t['to']} · 直线约 {t['km']}km · 用角落虚线 + 提示条表示")
+        print("  交互地图工具条可切「看全程」；要整趟不切，设 trip.map_scope=\"full\"。")
     print(f"\n--- 底图 ---\n  主底图: {basemap_ids[0]}（可在地图页「风格」切换: {', '.join(basemap_ids)}；"
           + "  页面内亦支持 watercolor/vintage/sticker/original 风格切换，[可用 trip.basemap: amap|osm|carto|esri_physical 覆盖]）")
 

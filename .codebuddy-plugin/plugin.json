@@ -1,7 +1,7 @@
 {
   "name": "tripweaver",
-  "version": "1.2.3",
-  "description": "AI travel planner that co-designs itineraries with users, then generates a zoomable map, a route image with a text itinerary, and hand-drawn shareable posters.",
+  "version": "1.3.1",
+  "description": "Travel advisor + full-plan expert: answers single-fact questions (tickets, opening hours, traffic, weather) with sourced citations, and co-designs itineraries that ship as a single-file plan document, a zoomable map, a route image, hand-drawn shareable posters, a pre-trip checklist and live weather.",
   "author": {
     "name": "WorkBuddy",
     "email": "noreply@workbuddy.cn"
@@ -20,14 +20,14 @@
     "zh": "旅行规划专家"
   },
   "displayDescription": {
-    "en": "Co-designs itineraries with you, then generates a zoomable map, a route image with a text itinerary, and hand-drawn posters you can share.",
-    "zh": "和你一起逐条敲定目的地、天数、预算与偏好，定制专属行程，一键生成可缩放地图、带文字行程的路线图，以及可直接发朋友圈的手绘旅行海报。"
+    "en": "Works as a travel advisor for quick sourced answers, and as a full-plan expert: a shareable, printable plan document with budget breakdown, plus a zoomable map, route image, hand-drawn posters, checklist and live weather.",
+    "zh": "既能当旅行顾问（门票/交通/天气，查完即答、带来源），也能当方案专家：聊清楚细节后交付一份可转发、可打印的完整方案书（含预算明细），外加可缩放地图、路线图、手绘分享图、出行清单与实时天气。"
   },
   "avatar": "avatars/expert.png",
   "categoryId": "12-IndustryConsultant",
   "defaultInitPrompt": {
-    "zh": "我想规划一次旅行，请一步步帮我确认细节，最后生成可缩放地图、带文字行程的路线图和可分享的旅行海报。",
-    "en": "I want to plan a trip. Help me confirm the details step by step, then generate a zoomable map, a route image with a text itinerary, and shareable travel posters."
+    "zh": "我想规划一次旅行，请一步步帮我确认细节，最后生成一份可转发的方案书、可缩放地图和可分享的海报。",
+    "en": "I want to plan a trip. Help me confirm the details step by step, then generate a shareable plan document, a zoomable map and shareable posters."
   },
   "plugin": "tripweaver",
   "tags": [
@@ -46,16 +46,20 @@
   ],
   "quickPrompts": [
     {
-      "en": "I want to plan a trip. Help me confirm the details step by step, then generate a zoomable map, a route image with a text itinerary, and shareable travel posters.",
-      "zh": "我想规划一次旅行，请一步步帮我确认细节，最后生成可缩放地图、带文字行程的路线图和可分享的旅行海报。"
+      "zh": "我想规划一次旅行，请一步步帮我确认细节，最后生成方案书、地图和可分享的海报",
+      "en": "I want to plan a trip. Help me confirm the details step by step, then generate a plan document, a map and shareable posters."
     },
     {
-      "en": "5 days in Chengdu: food + slow living",
-      "zh": "帮我在成都规划 5 天，主打美食和慢生活的行程"
+      "zh": "帮我在成都规划 5 天，主打美食和慢生活的行程",
+      "en": "5 days in Chengdu: food + slow living"
     },
     {
-      "en": "Check weather before departure",
-      "zh": "出发前帮我查一下实时天气，并更新出行清单"
+      "zh": "故宫门票多少钱？需要提前预约吗",
+      "en": "How much are Forbidden City tickets, and do I need to book ahead?"
+    },
+    {
+      "zh": "出发前帮我查一下实时天气，并更新出行清单",
+      "en": "Check weather before departure and update my checklist"
     }
   ]
 }

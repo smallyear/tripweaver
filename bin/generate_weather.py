@@ -8,6 +8,7 @@ generate_weather.py - 行程天气预报生成器
 
 产物：
   - weather.html ：逐日天气卡（天气 / 温度区间 / 降水概率 / 风速）+ 出行提示，可打印。
+  - weather.json ：同一份数据（cards + tips），供 generate_plan.py 内联进方案书。
   - 终端会同时打印一段精简文字简报，供专家回填进 Checklist 的天气项。
 
 用法：
@@ -429,6 +430,20 @@ __THEME_CSS__
     import os
 
     os.makedirs(args.out, exist_ok=True)
+
+    # 同步落一份 weather.json：generate_plan.py 若找到它，会把逐日预报内联进 plan.html 的「天气研判」
+    with open(os.path.join(args.out, "weather.json"), "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "generated": today.isoformat(),
+                "destination": destination,
+                "source": "Open-Meteo",
+                "tips": tips,
+                "cards": cards,
+            },
+            f, ensure_ascii=False, indent=2,
+        )
+
     out_path = os.path.join(args.out, "weather.html")
     html = (html.replace("__THEME_CSS__", THEME_CSS)
             .replace("__THEME_BAR__", THEME_BAR)

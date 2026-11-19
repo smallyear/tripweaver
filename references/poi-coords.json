@@ -323,5 +323,95 @@
     "lng": 103.947907,
     "coord_source": "wgs84",
     "note": "Photon aeroway=aerodrome；注意与天府国际机场（简阳，104.44）区分"
+  },
+  "西安咸阳国际机场": {
+    "lat": 34.4423643,
+    "lng": 108.7600313,
+    "coord_source": "wgs84",
+    "note": "Photon aeroway=aerodrome（陕西咸阳）；脚本曾判低置信仅因名称部分匹配，坐标已核实"
+  },
+  "丽江古城": {
+    "lat": 26.8739042,
+    "lng": 100.2352809,
+    "coord_source": "wgs84",
+    "note": "Photon place=suburb（云南丽江古城区，大研古城中心）"
+  },
+  "玉龙雪山": {
+    "lat": 27.0984141,
+    "lng": 100.1767026,
+    "coord_source": "wgs84",
+    "note": "Photon natural=peak（主峰扇子陡）；景区甘海子游客中心在东侧约 8km，次选 27.1005,100.2584"
+  },
+  "蓝月谷": {
+    "lat": 27.1292393,
+    "lng": 100.2467372,
+    "coord_source": "wgs84",
+    "note": "Photon historic=memorial，玉龙雪山东麓蓝月谷一带；次选 27.1294,100.2419"
+  },
+  "大落水村": {
+    "lat": 27.68267,
+    "lng": 100.76868,
+    "coord_source": "wgs84",
+    "note": "Photon place=village，OSM 写作『大洛水』；直接查『大落水村』0 命中。大洛水码头 27.68211,100.77313"
+  },
+  "里格观景台": {
+    "lat": 27.73232,
+    "lng": 100.74613,
+    "coord_source": "wgs84",
+    "note": "Photon place=hamlet『里格』；里格半岛 cape 27.73004,100.75038，观景台在半岛上方公路"
+  },
+  "女神湾": {
+    "lat": 27.70388,
+    "lng": 100.80469,
+    "coord_source": "wgs84",
+    "note": "Photon tourism=attraction『女神湾(赵家湾)』，四川盐源侧；另有 hamlet 27.7031,100.80547"
+  },
+  "草海走婚桥": {
+    "lat": 27.71308,
+    "lng": 100.87573,
+    "coord_source": "wgs84",
+    "note": "Photon highway=footway『走婚桥』（四川泸沽湖镇）；草海 wetland 在西南 2.5km：27.70404,100.85253"
+  },
+  "束河古镇": {
+    "lat": 26.9234735,
+    "lng": 100.2035898,
+    "coord_source": "wgs84",
+    "note": "Photon tourism=attraction（云南丽江古城区束河）"
+  },
+  "上虎跳峡": {
+    "lat": 27.1922265,
+    "lng": 100.1141065,
+    "coord_source": "wgs84",
+    "note": "Photon natural=gorge（迪庆香格里拉虎跳峡镇）；次选 27.1691,100.0689"
+  },
+  "独克宗古城": {
+    "lat": 27.8105134,
+    "lng": 99.7075855,
+    "coord_source": "wgs84",
+    "note": "Photon tourism=attraction（建塘镇/香格里拉市）"
+  },
+  "普达措国家公园": {
+    "lat": 27.9128041,
+    "lng": 99.9030771,
+    "coord_source": "wgs84",
+    "note": "Photon leisure=nature_reserve（属都湖方向）；入口霞给村一带次选 27.8057,99.9067"
+  },
+  "噶丹松赞林寺": {
+    "lat": 27.8635892,
+    "lng": 99.704374,
+    "coord_source": "wgs84",
+    "note": "Photon tourism=attraction（建塘镇，香格里拉市区北 5km）"
+  },
+  "香格里拉市": {
+    "lat": 27.8363076,
+    "lng": 99.7040577,
+    "coord_source": "wgs84",
+    "note": "Photon place=city（建塘镇中心）；次选 27.8026,99.7074"
+  },
+  "黑龙潭公园": {
+    "lat": 26.8922587,
+    "lng": 100.2403739,
+    "coord_source": "wgs84",
+    "note": "Photon leisure=park（丽江古城北端）；次选 25.1449,102.7495 是昆明黑龙潭，勿用"
   }
 }
