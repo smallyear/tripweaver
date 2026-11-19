@@ -1,6 +1,6 @@
 {
   "name": "tripweaver",
-  "version": "1.3.1",
+  "version": "1.3.2",
   "description": "Travel advisor + full-plan expert: answers single-fact questions (tickets, opening hours, traffic, weather) with sourced citations, and co-designs itineraries that ship as a single-file plan document, a zoomable map, a route image, hand-drawn shareable posters, a pre-trip checklist and live weather.",
   "author": {
     "name": "WorkBuddy",
@@ -46,8 +46,8 @@
   ],
   "quickPrompts": [
     {
-      "zh": "我想规划一次旅行，请一步步帮我确认细节，最后生成方案书、地图和可分享的海报",
-      "en": "I want to plan a trip. Help me confirm the details step by step, then generate a plan document, a map and shareable posters."
+      "zh": "我想规划一次旅行，请一步步帮我确认细节，最后生成一份可转发的方案书、可缩放地图和可分享的海报。",
+      "en": "I want to plan a trip. Help me confirm the details step by step, then generate a shareable plan document, a zoomable map and shareable posters."
     },
     {
       "zh": "帮我在成都规划 5 天，主打美食和慢生活的行程",

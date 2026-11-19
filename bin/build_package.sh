@@ -64,6 +64,30 @@ for f in "${REQUIRED[@]}"; do
 done
 [[ $missing -eq 0 ]] || { echo "打包中止：请先补齐上述文件。" >&2; exit 1; }
 
+# 校验 plugin.json：能解析，且 defaultInitPrompt 必须与 quickPrompts[0] 完全一致。
+# 专家中心上传时对这两处做严格等值校验，不一致会直接报「解析失败」，且包里能通过本地校验也拦不住，
+# 所以放在打包口上，避免又打出一个传不上去的包。
+python3 - "$STAGE/$PKG_NAME/.codebuddy-plugin/plugin.json" <<'PYCHECK'
+import json, sys
+path = sys.argv[1]
+try:
+    d = json.load(open(path, encoding="utf-8"))
+except Exception as e:  # noqa: BLE001
+    print(f"❌ plugin.json 解析失败: {e}", file=sys.stderr)
+    sys.exit(1)
+qp = d.get("quickPrompts") or []
+dp = d.get("defaultInitPrompt") or {}
+if not qp:
+    print("❌ plugin.json 缺少 quickPrompts", file=sys.stderr)
+    sys.exit(1)
+for k in ("zh", "en"):
+    if (dp.get(k) or "") != (qp[0].get(k) or ""):
+        print(f"❌ defaultInitPrompt.{k} 必须与 quickPrompts[0].{k} 完全一致"
+              f"（专家中心会报「解析失败」）", file=sys.stderr)
+        sys.exit(1)
+print(f"✅ plugin.json 校验通过（v{d.get('version')}，quickPrompts {len(qp)} 条）")
+PYCHECK
+
 mkdir -p "$(dirname "$OUT")"
 rm -f "$OUT"
 ( cd "$STAGE" && find "$PKG_NAME" -type f | LC_ALL=C sort | zip -q -X "$OUT" -@ )
